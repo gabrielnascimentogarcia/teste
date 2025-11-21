@@ -1,16 +1,14 @@
 import random
 
 class Register:
-    """
-    Representa um registrador de 16 bits.
-    """
+    """Representa um registrador de 16 bits."""
     def __init__(self, name, value=0):
         self.name = name
-        self._value = value # Armazena internamente
+        self._value = value 
 
     @property
     def value(self):
-        return self._value & 0xFFFF # Garante 16 bits unsigned
+        return self._value & 0xFFFF 
 
     @value.setter
     def value(self, val):
@@ -21,31 +19,25 @@ class Register:
 
 
 class CacheLine:
-    """
-    Representa uma linha de Cache (Direct Mapped).
-    """
+    """Representa uma linha de Cache (Direct Mapped)."""
     def __init__(self):
         self.valid = False
         self.tag = 0
-        self.data = 0 # Armazena uma palavra (simplificação para MIC-1)
+        self.data = 0 
 
 class MemorySystem:
-    """
-    Simula a RAM (4096 palavras) e uma Cache de Dados L1.
-    """
+    """Simula a RAM (4096 palavras) e uma Cache de Dados L1."""
     def __init__(self, size=4096, cache_size=16):
         self.ram = [0] * size
         self.cache_lines = [CacheLine() for _ in range(cache_size)]
         self.cache_size = cache_size
         self.last_access_status = "IDLE" # IDLE, HIT, MISS
+        self.last_accessed_addr = -1 # Para destaque na GUI
 
     def read(self, address):
-        """
-        Lê da memória verificando a cache primeiro.
-        """
-        address &= 0xFFF # Limita a 4096 posições
+        address &= 0xFFF 
+        self.last_accessed_addr = address
         
-        # Lógica de Cache Direct Mapped
         index = address % self.cache_size
         tag = address // self.cache_size
         line = self.cache_lines[index]
@@ -55,7 +47,6 @@ class MemorySystem:
             return line.data
         else:
             self.last_access_status = f"CACHE MISS (Idx: {index})"
-            # Busca na RAM e atualiza Cache
             val = self.ram[address]
             line.valid = True
             line.tag = tag
@@ -63,295 +54,232 @@ class MemorySystem:
             return val
 
     def write(self, address, value):
-        """
-        Escreve na memória (Write-Through).
-        """
         address &= 0xFFF
         value &= 0xFFFF
+        self.last_accessed_addr = address
         
-        # Escreve na RAM
         self.ram[address] = value
         
-        # Atualiza Cache se estiver lá (Write Allocate ou apenas update)
         index = address % self.cache_size
         tag = address // self.cache_size
         line = self.cache_lines[index]
         
-        # Estratégia simples: Atualiza a cache para manter coerência
         line.valid = True
         line.tag = tag
         line.data = value
         self.last_access_status = "WRITE MEM & CACHE"
 
     def load_program(self, machine_code):
-        """Carrega lista de inteiros na memória a partir do endereço 0."""
         for i, code in enumerate(machine_code):
             if i < len(self.ram):
                 self.ram[i] = code
 
 
 class ALU:
-    """
-    Unidade Lógica e Aritmética.
-    Suporta operações básicas do MIC-1 e gera flags N (Negative) e Z (Zero).
-    """
+    """Unidade Lógica e Aritmética."""
     def __init__(self):
         self.n_flag = False
         self.z_flag = False
         self.last_result = 0
 
     def compute(self, a, b, op):
-        """
-        op: Código da operação (string simplificada para simulação)
-            'ADD', 'SUB', 'AND', 'A', 'B', 'INC_A', 'DEC_A'
-        """
         res = 0
-        if op == 'ADD':
-            res = a + b
-        elif op == 'SUB': # A - B (Simplificado, MIC-1 real usa A + ~B + 1)
-            res = a - b
-        elif op == 'AND':
-            res = a & b
-        elif op == 'OR':
-            res = a | b
-        elif op == 'A':
-            res = a
-        elif op == 'B':
-            res = b
-        elif op == 'INC_A':
-            res = a + 1
-        elif op == 'DEC_A':
-            res = a - 1
-        elif op == 'INV_A':
-            res = ~a
+        if op == 'ADD': res = a + b
+        elif op == 'SUB': res = a - b
+        elif op == 'AND': res = a & b
+        elif op == 'OR':  res = a | b
+        elif op == 'A':   res = a
+        elif op == 'B':   res = b
+        elif op == 'INC_A': res = a + 1
+        elif op == 'DEC_A': res = a - 1
+        elif op == 'INV_A': res = ~a
         
-        # Ajuste para 16 bits (Simulando overflow circular)
         self.last_result = res & 0xFFFF
-        
-        # Atualiza Flags baseadas na interpretação de complemento de 2 para N
         self.z_flag = (self.last_result == 0)
-        self.n_flag = (self.last_result & 0x8000) != 0 # Bit mais significativo
-        
+        self.n_flag = (self.last_result & 0x8000) != 0
         return self.last_result
 
-    def shifter(self, value, shift_type):
-        """
-        shift_type: 'None', 'SRA1' (Shift Right Arithmetic), 'SLL8' (Shift Left Logical 8)
-        """
-        val = value & 0xFFFF
-        if shift_type == 'SRA1':
-             # Mantém o bit de sinal
-            sign = val & 0x8000
-            return (val >> 1) | sign
-        elif shift_type == 'SLL8':
-            return (val << 8) & 0xFFFF
-        return val
-
-
 class Mic1CPU:
-    """
-    Controlador principal da microarquitetura.
-    """
+    """Controlador principal da microarquitetura."""
     def __init__(self):
         # Datapath Registers
         self.mar = Register("MAR")
         self.mdr = Register("MDR")
         self.pc  = Register("PC")
-        self.mbr = Register("MBR") # Usado para conter o opcode as vezes
+        self.mbr = Register("MBR")
         self.sp  = Register("SP")
         self.lv  = Register("LV")
         self.cpp = Register("CPP")
         self.tos = Register("TOS")
-        self.opc = Register("OPC") # Registrador auxiliar para salvar PC antigo
-        self.h   = Register("H")   # Registrador acumulador da ALU (input A)
+        self.opc = Register("OPC")
+        self.h   = Register("H") 
 
-        # Componentes
         self.memory = MemorySystem()
         self.alu = ALU()
         
-        # Estado de Controle
         self.halted = False
         self.cycle_count = 0
+        self.control_signals = ""
         
-        # Buffer visual para barramentos (para a GUI ler)
-        self.bus_a_val = 0
-        self.bus_b_val = 0
-        self.bus_c_val = 0
-        self.control_signals = "" # Texto descrevendo o que está acontecendo
+        # Rastreamento para Animação de Barramento
+        # 'active' define se o barramento deve acender na GUI
+        self.bus_activity = {
+            'bus_a': False, # Registradores -> ALU A
+            'bus_b': False, # Registradores/MDR -> ALU B
+            'bus_c': False, # ALU/Shifter -> Registradores
+            'mem_read': False,
+            'mem_write': False
+        }
 
     def reset(self):
         registers = [self.mar, self.mdr, self.pc, self.mbr, self.sp, self.lv, self.cpp, self.tos, self.opc, self.h]
-        for r in registers:
-            r.value = 0
+        for r in registers: r.value = 0
         self.memory = MemorySystem()
         self.halted = False
         self.cycle_count = 0
-        self.bus_a_val = 0
-        self.bus_b_val = 0
-        self.bus_c_val = 0
+        self.clear_bus_activity()
 
-    def step_micro_instruction(self):
-        """
-        Executa UM ciclo de clock (Microinstrução).
-        Nota: Em um emulador completo, leríamos do Control Store.
-        Aqui, vamos emular a lógica do interpretador MAC-1 hardcoded
-        para facilitar a visualização passo-a-passo das macroinstruções.
-        """
-        # Esta função deve ser chamada pela GUI repetidamente.
-        pass 
-
-    # --- Métodos Auxiliares para Simulação das Macro-Instruções ---
-    # Como não estamos implementando um parser de microcódigo binário real (MAL),
-    # vamos simular o comportamento dos micro-passos para cada instrução MAC-1.
+    def clear_bus_activity(self):
+        for k in self.bus_activity:
+            self.bus_activity[k] = False
 
     def fetch_cycle(self):
-        """Simula o ciclo de busca (comum a todas instruções)."""
-        # 1. MAR = PC; rd
+        """Simula busca e define atividade de barramento visual."""
         self.mar.value = self.pc.value
-        self.control_signals = "MAR <- PC; Read Memory"
+        self.clear_bus_activity()
+        self.bus_activity['bus_b'] = True # PC -> Bus B -> ALU -> MAR (Simplificado visualmente)
+        self.bus_activity['mem_read'] = True
+        
         val = self.memory.read(self.mar.value)
-        
-        # 2. PC = PC + 1; rd (wait)
         self.pc.value += 1
-        self.mdr.value = val # Dado chega do barramento de dados
-        self.control_signals += " -> MDR Loaded"
+        self.mdr.value = val
+        self.mbr.value = self.mdr.value 
         
-        # 3. IR (MBR) = MDR;
-        self.mbr.value = self.mdr.value # No MIC-1 original o byte superior é ignorado ou tratado, aqui usamos word completa
-        
-        return self.mbr.value >> 12 # Retorna Opcode (4 bits superiores)
+        return self.mbr.value >> 12 
 
     def execute_instruction(self):
-        """
-        Executa uma instrução MAC-1 completa (Macro-passo).
-        Ideal para botão 'Step' na GUI.
-        """
         if self.halted: return
 
-        # Fetch
         opcode = self.fetch_cycle()
-        addr_field = self.mbr.value & 0x0FFF # 12 bits inferiores
-
-        # Decode & Execute
-        self.control_signals = f"Executing Opcode: {opcode:04b}"
+        addr_field = self.mbr.value & 0x0FFF
         
-        # LODD (0000)
-        if opcode == 0x0: 
-            val = self.memory.read(addr_field)
-            self.h.value = val # AC é simulado usando TOS ou lógica específica, no MAC-1 simples AC é o acumulador.
-            # Vamos assumir uma arquitetura de acumulador onde AC é um registrador lógico,
-            # mas no MIC-1 Tanenbaum, o AC geralmente flui pelo TOS ou um registro dedicado dependendo da versão.
-            # Usaremos o registrador 'H' como Acumulador principal para simplificar a visualização Lógica.
-            self.control_signals = f"LODD: AC <- Mem[{addr_field}]"
+        # Reseta atividades para o ciclo de execução
+        # (Mantemos mem_read true se o fetch acabou de acontecer para persistência visual breve)
+        self.control_signals = f"Op: {opcode:04b}"
 
-        # STOD (0001)
-        elif opcode == 0x1:
+        # Lógica das Instruções com Flags de Barramento
+        if opcode == 0x0: # LODD
+            val = self.memory.read(addr_field)
+            self.h.value = val
+            self.control_signals = f"LODD: AC <- Mem[{addr_field}]"
+            self.bus_activity['mem_read'] = True
+            self.bus_activity['bus_c'] = True # Mem -> H
+
+        elif opcode == 0x1: # STOD
             self.memory.write(addr_field, self.h.value)
             self.control_signals = f"STOD: Mem[{addr_field}] <- AC"
+            self.bus_activity['mem_write'] = True
+            self.bus_activity['bus_b'] = True # AC(H) -> Mem
 
-        # ADDD (0010)
-        elif opcode == 0x2:
+        elif opcode == 0x2: # ADDD
             mem_val = self.memory.read(addr_field)
             res = self.alu.compute(self.h.value, mem_val, 'ADD')
             self.h.value = res
-            self.control_signals = f"ADDD: AC <- AC + Mem[{addr_field}]"
+            self.control_signals = f"ADDD: AC += Mem[{addr_field}]"
+            self.bus_activity['bus_a'] = True # H
+            self.bus_activity['bus_b'] = True # Mem
+            self.bus_activity['bus_c'] = True # Result -> H
 
-        # SUBD (0011)
-        elif opcode == 0x3:
+        elif opcode == 0x3: # SUBD
             mem_val = self.memory.read(addr_field)
             res = self.alu.compute(self.h.value, mem_val, 'SUB')
             self.h.value = res
-            self.control_signals = f"SUBD: AC <- AC - Mem[{addr_field}]"
+            self.control_signals = f"SUBD: AC -= Mem[{addr_field}]"
+            self.bus_activity['bus_a'] = True
+            self.bus_activity['bus_b'] = True
+            self.bus_activity['bus_c'] = True
 
-        # JPOS (0100)
-        elif opcode == 0x4:
-            if self.h.value < 0x8000: # Positivo
+        elif opcode == 0x4: # JPOS
+            if self.h.value < 0x8000:
                 self.pc.value = addr_field
-                self.control_signals = f"JPOS: Jumped to {addr_field}"
-            else:
-                self.control_signals = "JPOS: No Jump"
+                self.bus_activity['bus_c'] = True # Carrega PC
+            self.control_signals = "JPOS"
 
-        # JZER (0101)
-        elif opcode == 0x5:
+        elif opcode == 0x5: # JZER
             if self.h.value == 0:
                 self.pc.value = addr_field
-                self.control_signals = f"JZER: Jumped to {addr_field}"
-            else:
-                self.control_signals = "JZER: No Jump"
+                self.bus_activity['bus_c'] = True
+            self.control_signals = "JZER"
 
-        # JUMP (0110)
-        elif opcode == 0x6:
+        elif opcode == 0x6: # JUMP
             self.pc.value = addr_field
-            self.control_signals = f"JUMP: Jumped to {addr_field}"
+            self.bus_activity['bus_c'] = True
+            self.control_signals = "JUMP"
 
-        # LOCO (0111)
-        elif opcode == 0x7:
+        elif opcode == 0x7: # LOCO
             self.h.value = addr_field
+            self.bus_activity['bus_c'] = True # Constante -> H
             self.control_signals = f"LOCO: AC <- {addr_field}"
 
-        # LODL (1000) - Carrega local (sp + x)
-        elif opcode == 0x8:
+        elif opcode == 0x8: # LODL
             eff_addr = (self.sp.value + addr_field) & 0xFFF
             self.h.value = self.memory.read(eff_addr)
-            self.control_signals = f"LODL: AC <- Mem[SP + {addr_field}]"
+            self.bus_activity['bus_b'] = True # SP + addr
+            self.bus_activity['mem_read'] = True
+            self.bus_activity['bus_c'] = True
+            self.control_signals = "LODL"
 
-        # STOL (1001)
-        elif opcode == 0x9:
+        elif opcode == 0x9: # STOL
             eff_addr = (self.sp.value + addr_field) & 0xFFF
             self.memory.write(eff_addr, self.h.value)
-            self.control_signals = f"STOL: Mem[SP + {addr_field}] <- AC"
+            self.bus_activity['bus_b'] = True
+            self.bus_activity['mem_write'] = True
+            self.control_signals = "STOL"
 
-        # ADDL (1010)
-        elif opcode == 0xA:
+        elif opcode == 0xA: # ADDL
             eff_addr = (self.sp.value + addr_field) & 0xFFF
             mem_val = self.memory.read(eff_addr)
             self.h.value = self.alu.compute(self.h.value, mem_val, 'ADD')
-            self.control_signals = f"ADDL: AC += Mem[SP+{addr_field}]"
+            self.bus_activity['bus_a'] = True
+            self.bus_activity['mem_read'] = True
+            self.bus_activity['bus_c'] = True
+            self.control_signals = "ADDL"
 
-        # SUBL (1011)
-        elif opcode == 0xB:
+        elif opcode == 0xB: # SUBL
             eff_addr = (self.sp.value + addr_field) & 0xFFF
             mem_val = self.memory.read(eff_addr)
             self.h.value = self.alu.compute(self.h.value, mem_val, 'SUB')
-            self.control_signals = f"SUBL: AC -= Mem[SP+{addr_field}]"
-
-        # JNEG (1100)
-        elif opcode == 0xC:
-            if self.h.value >= 0x8000: # Bit de sinal setado
+            self.bus_activity['bus_a'] = True
+            self.bus_activity['mem_read'] = True
+            self.bus_activity['bus_c'] = True
+            self.control_signals = "SUBL"
+            
+        elif opcode == 0xC: # JNEG
+            if self.h.value >= 0x8000:
                 self.pc.value = addr_field
-                self.control_signals = f"JNEG: Jumped to {addr_field}"
-            else:
-                self.control_signals = "JNEG: No Jump"
+                self.bus_activity['bus_c'] = True
+            self.control_signals = "JNEG"
 
-        # JNZE (1101)
-        elif opcode == 0xD:
+        elif opcode == 0xD: # JNZE
             if self.h.value != 0:
                 self.pc.value = addr_field
-                self.control_signals = f"JNZE: Jumped to {addr_field}"
-            else:
-                self.control_signals = "JNZE: No Jump"
+                self.bus_activity['bus_c'] = True
+            self.control_signals = "JNZE"
 
-        # CALL (1110)
-        elif opcode == 0xE:
+        elif opcode == 0xE: # CALL
             self.sp.value = (self.sp.value - 1) & 0xFFFF
-            self.memory.write(self.sp.value, self.pc.value) # Salva endereço de retorno
+            self.memory.write(self.sp.value, self.pc.value)
             self.pc.value = addr_field
-            self.control_signals = f"CALL: Called {addr_field}"
+            self.bus_activity['mem_write'] = True
+            self.bus_activity['bus_c'] = True
+            self.control_signals = "CALL"
 
-        # Instruções Especiais / Pilha (1111)
-        elif opcode == 0xF:
-            func = addr_field # 12 bits definem qual operação
-            if func == 0: # HALT? Ou POP?
-                 # Implementação customizada de HALT para fins educacionais (não padrão MAC-1 mas útil)
+        elif opcode == 0xF: # Special/Halt
+            func = addr_field
+            if func == 0:
                 self.halted = True
                 self.control_signals = "HALTED"
-            elif func == 1: # PSHI (Push Indirect)
-                # Simplificado
-                pass
-            # ... Outras instruções de pilha podem ser adicionadas aqui
             else:
-                # Fallback: assumir HALT para código desconhecido neste simulador básico
-                self.halted = True
-                self.control_signals = f"Unknown/Halt: {func}"
+                self.control_signals = f"Special: {func}"
 
         self.cycle_count += 1

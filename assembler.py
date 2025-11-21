@@ -19,8 +19,7 @@ OPCODES = {
     'JNEG': 0xC000,
     'JNZE': 0xD000,
     'CALL': 0xE000,
-    # Instruções especiais mapeadas para o prefixo F (1111)
-    'PSHI': 0xF000 + 1, # Exemplo
+    'PSHI': 0xF000 + 1,
     'POPI': 0xF000 + 2,
     'PUSH': 0xF000 + 3,
     'POP':  0xF000 + 4,
@@ -28,20 +27,15 @@ OPCODES = {
     'SWAP': 0xF000 + 6,
     'INSP': 0xF000 + 7,
     'DESP': 0xF000 + 8,
-    'HALT': 0xFFFF      # Custom simulation stop
+    'HALT': 0xFFFF
 }
 
 def assemble(source_code):
-    """
-    Recebe uma string contendo o código fonte assembly.
-    Retorna uma lista de inteiros (código de máquina).
-    """
     lines = source_code.splitlines()
     cleaned_lines = []
     
-    # Pré-processamento: remover comentários e espaços extras
     for line in lines:
-        line = line.split(';')[0].strip() # Remove comentários
+        line = line.split(';')[0].strip()
         if line:
             cleaned_lines.append(line)
 
@@ -49,8 +43,7 @@ def assemble(source_code):
     machine_code = []
     current_address = 0
 
-    # --- Passagem 1: Identificar Labels ---
-    temp_program = [] # Armazena (label, instruction, operand)
+    temp_program = []
     
     for line in cleaned_lines:
         parts = line.split()
@@ -58,7 +51,6 @@ def assemble(source_code):
         instruction = None
         operand = None
 
-        # Verifica se começa com label (termina com :)
         if parts[0].endswith(':'):
             label = parts[0][:-1]
             symbol_table[label] = current_address
@@ -67,7 +59,7 @@ def assemble(source_code):
                 if len(parts) > 2:
                     operand = parts[2]
             else:
-                continue # Linha só com label
+                continue
         else:
             instruction = parts[0].upper()
             if len(parts) > 1:
@@ -77,7 +69,6 @@ def assemble(source_code):
             temp_program.append((instruction, operand, current_address))
             current_address += 1
 
-    # --- Passagem 2: Gerar Código de Máquina ---
     try:
         for instr, op, addr in temp_program:
             if instr not in OPCODES:
@@ -85,8 +76,6 @@ def assemble(source_code):
 
             base_opcode = OPCODES[instr]
             
-            # Instruções tipo 1111 (Especiais) não usam operando de endereço padrão geralmente,
-            # mas aqui simplificamos. Se for HALT ou RETN, não precisa de operando.
             if instr in ['HALT', 'RETN', 'SWAP']:
                 machine_code.append(base_opcode)
                 continue
@@ -101,7 +90,6 @@ def assemble(source_code):
                     except ValueError:
                          raise ValueError(f"Operando inválido: {op} para instrução {instr}")
             
-            # Verifica limites do operando (12 bits = 4095)
             if operand_val > 4095 or operand_val < 0:
                  raise ValueError(f"Operando fora dos limites (0-4095): {operand_val}")
 
@@ -112,17 +100,3 @@ def assemble(source_code):
         return [], str(e)
 
     return machine_code, "Sucesso"
-
-# Teste rápido se rodar direto
-if __name__ == "__main__":
-    code = """
-    LOCO 10
-    STOD 500
-    LOCO 20
-    ADDD 500
-    STOD 501
-    HALT
-    """
-    bin_code, msg = assemble(code)
-    print(f"Montagem: {msg}")
-    print([hex(x) for x in bin_code])
