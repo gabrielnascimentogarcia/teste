@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from mic1_hardware import Mic1CPU
-from assembler import assemble
+from assembler import assemble, OPCODES 
 
 class CodeEditor(tk.Frame):
     """
@@ -99,7 +99,7 @@ class CodeEditor(tk.Frame):
 class Mic1GUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 / MAC-1 v5.1 (Platinum) - Layout Perfeito")
+        self.root.title("Simulador MIC-1 / MAC-1 v5.4 (Fixed Crashes & UI)")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -110,6 +110,11 @@ class Mic1GUI:
         
         self.follow_pc = tk.BooleanVar(value=True)
         self.user_interacting = False 
+        
+        # Mapa reverso de Opcodes para exibir instrução atual
+        self.rev_opcodes = {}
+        for k, v in OPCODES.items():
+            self.rev_opcodes[v] = k
         
         style = ttk.Style()
         style.theme_use('clam')
@@ -124,23 +129,18 @@ class Mic1GUI:
         self.editor = CodeEditor(left_frame)
         self.editor.pack(fill=tk.BOTH, expand=True, padx=2)
         
-        default_code = """; Teste Platinum v5.1 - Stack & Recursao
-LOCO 10     ; Contador = 10
-STOD 100    ; Salva na RAM[100]
-LOCO 0
-STOD 101    ; Soma = 0
+        default_code = """; Teste UI Corrigida
+LOCO 10     ; AC = 10
+STOD 100    ; Mem[100] = 10
+LOCO 5
+ADDD 100    ; AC = 5 + Mem[100]
+STOD 101    ; Salva resultado
 
-Loop:       ; Label
+Loop:
 LODD 100
 JZER Fim
-PUSH        ; Empilha Contador
-LODD 101
-ADDL 0      ; Soma += Stack[Top]
-STOD 101
-POP         ; Limpa pilha
-LODD 100
 LOCO -1
-ADDL 0      ; Decrementa
+ADDD 100    ; Decrementa
 STOD 100
 JUMP Loop
 
@@ -219,6 +219,13 @@ HALT
         # Memória
         mem_frame = ttk.LabelFrame(right_frame, text="Memória Principal")
         mem_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Painel de Instrução
+        self.lbl_curr_instr = tk.Label(mem_frame, text="Inicializado", 
+                                       bg="#d9edf7", fg="#31708f", font=("Consolas", 11, "bold"), 
+                                       relief="solid", bd=1, padx=5, pady=5)
+        self.lbl_curr_instr.pack(fill=tk.X, padx=2, pady=2)
+
         tk.Checkbutton(mem_frame, text="Follow PC (Auto-Scroll)", variable=self.follow_pc).pack(anchor=tk.W)
         
         mem_scroll = ttk.Scrollbar(mem_frame, orient="vertical")
@@ -280,6 +287,10 @@ HALT
         self.reg_texts[name] = text
 
     def draw_line(self, coords, color="gray", width=2, arrow=None, tags=None):
+        # CORREÇÃO DO BUG DO CRASH: 'fill' -> 'color'
+        # Na verdade, create_line usa 'fill'. A minha função wrapper draw_line tinha 'color' na def, 
+        # mas a chamada estava passando 'fill'. 
+        # Correção: Alterar a definição para aceitar 'color' e passar para 'fill'.
         return self.canvas.create_line(coords, fill=color, width=width, arrow=arrow, 
                                      capstyle=tk.ROUND, joinstyle=tk.ROUND, tags=tags)
 
@@ -361,20 +372,21 @@ HALT
         self.draw_line((cx, shift_y+30, cx, shift_y+45, bus_c_x, shift_y+45, bus_c_x, bus_bottom_y + 60), 
                        width=4, arrow=tk.LAST, tags="bus_c")
 
-        # RAM (Agora com TAGS para animação!)
+        # RAM (CORREÇÃO DO BUG DO CRASH)
         ram_x = bus_b_x - 80
         ram_y = y_start
         self.canvas.create_rectangle(ram_x, ram_y, ram_x + 60, ram_y + gap_y + reg_h, fill="#fff0b3", outline="black")
         self.canvas.create_text(ram_x + 30, ram_y + gap_y, text="RAM", font=("Arial", 10, "bold"))
         
-        # Linha MAR -> RAM (Address)
-        self.draw_line((reg_x, y_start + 10, ram_x + 60, y_start + 10), arrow=tk.LAST, fill="black", width=1, tags="ram_addr")
-        # Linha RAM <-> MDR (Data)
+        # Aqui estava o erro. draw_line espera 'color', não 'fill'
+        self.draw_line((reg_x, y_start + 10, ram_x + 60, y_start + 10), arrow=tk.LAST, color="black", width=1, tags="ram_addr")
         mdr_y = y_start + gap_y
-        self.draw_line((ram_x + 60, mdr_y + 20, reg_x, mdr_y + 20), arrow=tk.BOTH, fill="black", width=1, tags="ram_data")
+        self.draw_line((ram_x + 60, mdr_y + 20, reg_x, mdr_y + 20), arrow=tk.BOTH, color="black", width=1, tags="ram_data")
 
         sig = self.cpu.control_signals if hasattr(self, 'cpu') else "RESET"
-        self.control_label_id = self.canvas.create_text(cx + 200, alu_y, text=sig, fill="red", font=("Consolas", 12, "bold"), anchor="w")
+        
+        # CORREÇÃO: Texto de controle movido para o topo central
+        self.control_label_id = self.canvas.create_text(cx, 20, text=sig, fill="red", font=("Consolas", 14, "bold"), anchor="center")
 
         if hasattr(self, 'cpu'): self.update_ui_values_only()
 
@@ -384,7 +396,6 @@ HALT
             self.canvas.itemconfig("bus_a", fill="gray")
             self.canvas.itemconfig("bus_b", fill="gray")
             self.canvas.itemconfig("bus_c", fill="gray")
-            # Resetar linhas de RAM
             self.canvas.itemconfig("ram_addr", fill="black", width=1)
             self.canvas.itemconfig("ram_data", fill="black", width=1)
 
@@ -392,7 +403,6 @@ HALT
         sinal = self.cpu.control_signals.upper()
         tags_to_light = []
         
-        # Lógica Heurística Melhorada
         if "LODD" in sinal: 
             tags_to_light = ["main_bus_b", "MDR_to_b", "bus_c", "c_to_H", "ram_addr", "ram_data"]
         elif "STOD" in sinal: 
@@ -402,22 +412,17 @@ HALT
         elif "LOCO" in sinal: 
             tags_to_light = ["main_bus_b", "MBR_to_b", "bus_c", "c_to_H"]
         elif "LODL" in sinal or "ADDL" in sinal or "SUBL" in sinal: 
-            # Acessam memória via Stack Pointer (indiretamente) ou Frame Pointer
             tags_to_light = ["main_bus_b", "SP_to_b", "MDR_to_b", "bus_c", "c_to_H", "ram_addr", "ram_data"]
         elif "PUSH" in sinal or "PSHI" in sinal or "CALL" in sinal: 
-            # Escrita na Pilha
             tags_to_light = ["main_bus_b", "SP_to_b", "bus_c", "c_to_SP", "bus_a", "h_to_alu_a", "ram_addr", "ram_data"]
         elif "POP" in sinal or "POPI" in sinal or "RETN" in sinal: 
-            # Leitura da Pilha
             tags_to_light = ["main_bus_b", "SP_to_b", "bus_c", "c_to_SP", "c_to_H", "ram_addr", "ram_data"]
         elif "JUMP" in sinal: 
             tags_to_light = ["main_bus_b", "MBR_to_b", "bus_c", "c_to_PC"]
         elif "JPOS" in sinal or "JZER" in sinal or "JNEG" in sinal or "JNZE" in sinal:
-            # Só acende caminho para PC se foi TOMADO (NOT TAKEN não acende)
             if "NOT TAKEN" not in sinal:
                 tags_to_light = ["main_bus_b", "MBR_to_b", "bus_c", "c_to_PC"]
             else:
-                # Se não tomou, não mostra fluxo pro PC (apenas ciclo normal de fetch, aqui omitido pra clareza)
                 tags_to_light = []
 
         for tag in tags_to_light: 
@@ -426,7 +431,6 @@ HALT
             else:
                 self.canvas.itemconfig(tag, fill=active_color)
             
-        # Fallback genérico
         if not tags_to_light and "NOP" not in sinal and "HALT" not in sinal:
             act = self.cpu.bus_activity
             if act['bus_a']: self.canvas.itemconfig("bus_a", fill=active_color)
@@ -446,7 +450,8 @@ HALT
 
     def init_memory_list(self):
         self.mem_list.delete(0, tk.END)
-        for i in range(4096): self.mem_list.insert(tk.END, f"[{i:03X}]: {self.fmt_val(0)}")
+        for i in range(4096): 
+            self.mem_list.insert(tk.END, f"[{i:03X} | {i:04d}]: {self.fmt_val(0)}")
 
     def update_memory_row(self, idx, is_pc=False, is_sp=False, is_access=False):
         val = self.cpu.memory.ram[idx]
@@ -455,7 +460,8 @@ HALT
         if is_sp: markers.append("SP")
         marker_str = f" [{', '.join(markers)}]" if markers else ""
         
-        text = f"[{idx:03X}]: {self.fmt_val(val)}{marker_str}"
+        text = f"[{idx:03X} | {idx:04d}]: {self.fmt_val(val)}{marker_str}"
+        
         self.mem_list.delete(idx)
         self.mem_list.insert(idx, text)
         
@@ -472,6 +478,42 @@ HALT
         curr_sp = self.cpu.sp.value
         curr_addr = self.cpu.memory.last_accessed_addr
         
+        # --- ATUALIZAÇÃO LÓGICA: USAR OPC (Atual) vs PC (Futuro) ---
+        # Se o ciclo é 0, mostramos o que está no PC (Next)
+        # Se o ciclo > 0, mostramos o que foi acabou de ser feito (OPC)
+        
+        target_addr = 0
+        label_prefix = ""
+        
+        if self.cpu.cycle_count == 0:
+            target_addr = curr_pc
+            label_prefix = "Próxima (PC)"
+        else:
+            target_addr = self.cpu.opc.value
+            label_prefix = "Executada (OPC)"
+
+        if 0 <= target_addr < 4096:
+            raw_instr = self.cpu.memory.ram[target_addr]
+            opcode_base = raw_instr & 0xF000
+            operand = raw_instr & 0xFFF
+            
+            mnemonic = "???"
+            instr_str = "???"
+            
+            if opcode_base == 0xF000:
+                mnemonic = self.rev_opcodes.get(raw_instr, f"UNK {raw_instr:04X}")
+                instr_str = mnemonic
+            else:
+                mnemonic = self.rev_opcodes.get(opcode_base, f"UNK {opcode_base:04X}")
+                instr_str = f"{mnemonic} {operand:03X}"
+                if not self.display_hex:
+                    instr_str = f"{mnemonic} {operand}"
+
+            self.lbl_curr_instr.config(text=f"{label_prefix}: [{target_addr:03X}] | {instr_str}")
+        else:
+            self.lbl_curr_instr.config(text=f"{label_prefix}: [{target_addr:03X}] | ---")
+        # ------------------------------------------------------
+
         idxs = {curr_pc, curr_sp, curr_addr, self.prev_pc, self.prev_sp, self.prev_addr}
         idxs.discard(-1)
         
@@ -479,7 +521,7 @@ HALT
             self.mem_list.delete(0, tk.END)
             for i in range(4096):
                 val = self.cpu.memory.ram[i]
-                self.mem_list.insert(tk.END, f"[{i:03X}]: {self.fmt_val(val)}")
+                self.mem_list.insert(tk.END, f"[{i:03X} | {i:04d}]: {self.fmt_val(val)}")
             for idx in [curr_pc, curr_sp, curr_addr]:
                  if 0 <= idx < 4096: self.update_memory_row(idx, idx==curr_pc, idx==curr_sp, idx==curr_addr)
         else:
@@ -523,7 +565,7 @@ HALT
         if not sel: return
         addr = sel[0]
         
-        prompt = f"Valor para Mem[{addr:03X}]" + (" (HEX):" if self.display_hex else ":")
+        prompt = f"Valor para Mem[{addr:03X} | {addr:04d}]" + (" (HEX):" if self.display_hex else ":")
         self.user_interacting = True 
         res = simpledialog.askstring("Editar", prompt)
         self.user_interacting = False

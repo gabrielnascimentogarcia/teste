@@ -174,6 +174,9 @@ class Mic1CPU:
         for k in self.bus_activity: self.bus_activity[k] = False
 
     def fetch_cycle(self):
+        # CORREÇÃO: Atualizar OPC (Old PC) com o PC atual antes de incrementar
+        self.opc.value = self.pc.value
+        
         self.mar.value = self.pc.value
         self.clear_bus_activity()
         self.bus_activity['bus_b'] = True 
