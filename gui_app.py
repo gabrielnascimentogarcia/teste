@@ -133,21 +133,22 @@ class Mic1GUI:
         self.editor = CodeEditor(left_frame)
         self.editor.pack(fill=tk.BOTH, expand=True, padx=2)
         
-        default_code = """; Programa Demo - Teste de Fix
-.DATA 100 10    ; Var A = 10
-B: .DATA 101 20 ; Var B = 20 (Com Label)
-RES: .DATA 102 0 ; Var Res = 0
+        default_code = """; --- ÁREA DE DADOS (As "Caixas" na Memória) ---
+PRECO:  .DATA 100 50   ; Caixa 100 tem o valor 50 (Preço)
+FRETE:  .DATA 101 10   ; Caixa 101 tem o valor 10 (Frete)
+TOTAL:  .DATA 102 0    ; Caixa 102 começa vazia (para o Total)
 
-Start:
-LODD 100    ; Carrega A
-ADDD B      ; Soma B (Usando Label)
-STOD RES    ; Salva em Res
-JZER Fim    ; Se zero, pula
-LOCO 5      ; Carrega constante 5
-ADDD RES    ; Soma ao resultado
-
-Fim:
-HALT
+; --- INÍCIO DO PROGRAMA ---
+Inicio:
+    LODD PRECO   ; 1. A "mão" pega o valor da caixa PRECO (Mão segura: 50)
+    
+    ADDD FRETE   ; 2. Soma o valor de FRETE ao que está na mão (50 + 10 = 60)
+                 ;    (Agora a mão segura: 60)
+    
+    STOD TOTAL   ; 3. Guarda o valor da mão na caixa TOTAL
+                 ;    (A caixa TOTAL agora tem 60)
+    
+    HALT         ; 4. Fim do trabalho.
 """
         self.editor.set_code(default_code)
         ttk.Button(left_frame, text="Montar (Assemble)", command=self.assemble_code).pack(fill=tk.X, pady=5)
@@ -557,7 +558,7 @@ HALT
         messagebox.showinfo("Montagem", f"Sucesso! {count} palavras/instruções carregadas.")
 
     def step_button_action(self):
-        # CORREÇÃO: Impede condições de corrida se já estiver rodando
+        # CORREÇÃO CRÍTICA: Impede condições de corrida se já estiver rodando
         if self.is_running: return
 
         if self.cpu.halted:
@@ -593,8 +594,16 @@ HALT
         else: self.is_running = False
 
     def stop_run(self): self.is_running = False
+    
     def reset_cpu(self):
         self.stop_run()
+        
+        # CORREÇÃO CRÍTICA: Cancela animações pendentes para evitar crash
+        if self.anim_job:
+            self.root.after_cancel(self.anim_job)
+            self.anim_job = None
+            self.reset_lines()
+            
         self.prev_pc = -1
         self.prev_sp = -1
         self.prev_addr = -1

@@ -52,7 +52,8 @@ def assemble(source_code):
                 addr = int(addr_str, 16) if addr_str.upper().startswith("0X") else int(addr_str)
                 val = int(val_str, 16) if val_str.upper().startswith("0X") else int(val_str)
                 
-                data_segment[addr] = val
+                # CORREÇÃO CRÍTICA: Máscara de 16 bits para permitir valores negativos no código fonte
+                data_segment[addr] = val & 0xFFFF
 
                 # Se houver algo antes do .DATA, deve ser um label (ex: VAR: .DATA ...)
                 if data_idx > 0:

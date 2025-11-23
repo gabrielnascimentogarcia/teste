@@ -82,7 +82,7 @@ class Cache:
         line = self.lines[index]
 
         if line['valid'] and line['tag'] == tag:
-            line['data'] = value
+            line['data'] = value & 0xFFFF # Garante integridade na cache
             self.last_status = "WRITE HIT"
         else:
             self.last_status = "WRITE MISS"
@@ -118,12 +118,11 @@ class MemorySystem:
 
     def write(self, address, value):
         real_addr = self._mask_addr(address)
-        value &= 0xFFFF
+        value &= 0xFFFF # CORREÇÃO CRÍTICA: Garante 16-bits unsigned na memória
         self.last_accessed_addr = real_addr
         self.ram[real_addr] = value
         
-        # CORREÇÃO: Coerência de Cache (Harvard Architecture Fix)
-        # Atualiza ambas as caches para evitar dados obsoletos em código auto-modificável
+        # Coerência de Cache (Harvard Architecture Fix)
         self.d_cache.write_through(real_addr, value)
         self.i_cache.write_through(real_addr, value)
 
@@ -132,11 +131,11 @@ class MemorySystem:
         if isinstance(machine_code, dict):
             for addr, val in machine_code.items():
                 if 0 <= addr < self.size:
-                    self.ram[addr] = val
+                    self.ram[addr] = val & 0xFFFF # CORREÇÃO CRÍTICA
         else:
             for i, code in enumerate(machine_code):
                 if i < len(self.ram):
-                    self.ram[i] = code
+                    self.ram[i] = code & 0xFFFF # CORREÇÃO CRÍTICA
         self.flush_caches()
 
     def flush_caches(self):
@@ -154,7 +153,7 @@ class ALU:
 
     def compute(self, a, b, op):
         res = 0
-        # Converte para sinalizado de 16 bits
+        # Converte para sinalizado de 16 bits para cálculos aritméticos
         a_signed = a if a < 0x8000 else a - 0x10000
         b_signed = b if b < 0x8000 else b - 0x10000
         
@@ -168,7 +167,7 @@ class ALU:
         elif op == 'DEC_A': res = a_signed - 1
         elif op == 'INV_A': res = ~a
         elif op == 'LSHIFT': res = a << 1
-        elif op == 'RSHIFT': res = a >> 1 # Logical Shift Right (padrão)
+        elif op == 'RSHIFT': res = a >> 1 # Logical Shift Right
         
         self.last_result = res & 0xFFFF
         self.z_flag = (self.last_result == 0)
