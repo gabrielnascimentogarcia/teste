@@ -56,10 +56,6 @@ class Cache:
         self.miss_count = 0
 
     def read(self, real_addr, ram_memory):
-        """
-        Lê dados da cache se a tag corresponder (HIT), caso contrário busca na RAM (MISS).
-        Atualiza contadores de hit/miss e estado da cache.
-        """
         index = real_addr % self.size
         tag = real_addr // self.size
         line = self.lines[index]
@@ -79,8 +75,7 @@ class Cache:
 
     def write_through(self, real_addr, value):
         """
-        Atualiza a cache apenas se o bloco já estiver presente (política Write No-Allocate).
-        Sempre assume que o chamador atualiza a RAM separadamente (Write-Through).
+        Atualiza a cache se o bloco estiver presente (Write-Through).
         """
         index = real_addr % self.size
         tag = real_addr // self.size
@@ -100,7 +95,6 @@ class Cache:
 class MemorySystem:
     """
     Gerencia a memória principal de 4096 palavras e caches L1 associadas.
-    Lida com mascaramento de endereço e roteamento de acesso à memória.
     """
     def __init__(self, size=4096, cache_size=8):
         self.size = size
@@ -127,15 +121,14 @@ class MemorySystem:
         value &= 0xFFFF
         self.last_accessed_addr = real_addr
         self.ram[real_addr] = value
+        
+        # CORREÇÃO: Coerência de Cache (Harvard Architecture Fix)
+        # Atualiza ambas as caches para evitar dados obsoletos em código auto-modificável
         self.d_cache.write_through(real_addr, value)
+        self.i_cache.write_through(real_addr, value)
 
     def load_program(self, machine_code):
-        """
-        Carrega código de máquina na RAM.
-        Suporta carregamento esparso via dicionário (endereço: valor) ou lista sequencial.
-        """
         self.ram = [0] * self.size
-        
         if isinstance(machine_code, dict):
             for addr, val in machine_code.items():
                 if 0 <= addr < self.size:
@@ -153,7 +146,6 @@ class MemorySystem:
 class ALU:
     """
     Unidade Lógica e Aritmética.
-    Realiza operações de 16 bits e atualiza as flags N (Negativo) e Z (Zero).
     """
     def __init__(self):
         self.n_flag = False 
@@ -161,12 +153,8 @@ class ALU:
         self.last_result = 0
 
     def compute(self, a, b, op):
-        """
-        Executa a operação solicitada.
-        Lida com aritmética com sinal de 16 bits convertendo para int python, operando e mascarando de volta.
-        """
         res = 0
-        # Converte inteiro sem sinal de 16 bits para com sinal para aritmética correta
+        # Converte para sinalizado de 16 bits
         a_signed = a if a < 0x8000 else a - 0x10000
         b_signed = b if b < 0x8000 else b - 0x10000
         
@@ -180,7 +168,7 @@ class ALU:
         elif op == 'DEC_A': res = a_signed - 1
         elif op == 'INV_A': res = ~a
         elif op == 'LSHIFT': res = a << 1
-        elif op == 'RSHIFT': res = a >> 1
+        elif op == 'RSHIFT': res = a >> 1 # Logical Shift Right (padrão)
         
         self.last_result = res & 0xFFFF
         self.z_flag = (self.last_result == 0)
@@ -189,8 +177,7 @@ class ALU:
 
 class Mic1CPU:
     """
-    Implementação do núcleo da CPU para MIC-1.
-    Gerencia registradores, interação com memória e o ciclo de instrução (Busca-Decodificação-Execução).
+    Núcleo da CPU MIC-1.
     """
     def __init__(self):
         self.mar = Register("MAR")
@@ -236,13 +223,6 @@ class Mic1CPU:
         for k in self.bus_activity: self.bus_activity[k] = False
 
     def fetch_cycle(self):
-        """
-        Realiza o ciclo de busca padrão:
-        1. PC -> MAR
-        2. Ler Memória -> MDR -> MBR
-        3. Incremento de PC
-        4. Extrair Opcode
-        """
         self.opc.value = self.pc.value
         self.mar.value = self.pc.value
         self.clear_bus_activity()
@@ -258,16 +238,13 @@ class Mic1CPU:
         return self.current_opcode
 
     def execute_instruction(self):
-        """
-        Decodifica e executa a instrução atual com base no opcode.
-        Atualiza sinais de controle e atividade do barramento para visualização.
-        """
         if self.halted: return
         opcode = self.fetch_cycle()
         addr_field = self.mbr.value & 0x0FFF
         op_bin = f"{opcode:04b}"
         self.control_signals = f"Op: {op_bin}"
 
+        # Mapeamento de Operações
         if opcode == Opcode.LODD:
             val = self.memory.read_data(addr_field)
             self.h.value = self.alu.compute(val, 0, 'A') 
@@ -314,7 +291,6 @@ class Mic1CPU:
 
         elif opcode == Opcode.LOCO:
             const_val = addr_field
-            # Extensão de sinal para constante de 12 bits
             if const_val & 0x800: const_val -= 0x1000 
             self.h.value = self.alu.compute(const_val, 0, 'A') 
             self.control_signals = f"LOCO: AC <- {const_val}"

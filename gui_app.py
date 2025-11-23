@@ -5,8 +5,7 @@ from assembler import assemble, OPCODES
 
 class CodeEditor(tk.Frame):
     """
-    Widget de editor de texto personalizado com numeração de linhas e destaque de sintaxe.
-    Otimizado para edição de código assembly.
+    Widget de editor de texto com numeração e syntax highlighting.
     """
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
@@ -100,11 +99,10 @@ class CodeEditor(tk.Frame):
 class Mic1GUI:
     """
     Aplicação GUI principal para o Simulador MIC-1.
-    Gerencia a instância da CPU, canvas de visualização, visão de memória e controles do usuário.
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 / MAC-1 v5.5 (Professional Edition)")
+        self.root.title("Simulador MIC-1 / MAC-1 v5.6 (Fixed & Optimized)")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -135,18 +133,18 @@ class Mic1GUI:
         self.editor = CodeEditor(left_frame)
         self.editor.pack(fill=tk.BOTH, expand=True, padx=2)
         
-        default_code = """; Programa Demo
+        default_code = """; Programa Demo - Teste de Fix
 .DATA 100 10    ; Var A = 10
-.DATA 101 20    ; Var B = 20
-.DATA 102 0     ; Var Res = 0
+B: .DATA 101 20 ; Var B = 20 (Com Label)
+RES: .DATA 102 0 ; Var Res = 0
 
 Start:
 LODD 100    ; Carrega A
-ADDD 101    ; Soma B
-STOD 102    ; Salva em Res
+ADDD B      ; Soma B (Usando Label)
+STOD RES    ; Salva em Res
 JZER Fim    ; Se zero, pula
 LOCO 5      ; Carrega constante 5
-ADDD 102    ; Soma ao resultado
+ADDD RES    ; Soma ao resultado
 
 Fim:
 HALT
@@ -154,7 +152,7 @@ HALT
         self.editor.set_code(default_code)
         ttk.Button(left_frame, text="Montar (Assemble)", command=self.assemble_code).pack(fill=tk.X, pady=5)
 
-        # Painel Central: Visualização do Datapath
+        # Painel Central
         center_frame = ttk.Frame(self.paned_window, width=650)
         self.paned_window.add(center_frame, weight=3)
         ttk.Label(center_frame, text="Microarquitetura (Datapath MIC-1)", font=("Arial", 10, "bold")).pack(pady=5)
@@ -170,7 +168,7 @@ HALT
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
         self.canvas.bind("<Configure>", self.on_canvas_resize)
         
-        # Painel Direito: Controles e Memória
+        # Painel Direito
         right_frame = ttk.Frame(self.paned_window, width=320)
         self.paned_window.add(right_frame, weight=1)
         
@@ -198,7 +196,6 @@ HALT
         self.lbl_micro = ttk.Label(ctrl_frame, text="Phase: FETCH", foreground="red")
         self.lbl_micro.pack(side=tk.RIGHT, padx=5)
 
-        # Visualização da Cache
         cache_main_frame = ttk.LabelFrame(right_frame, text="Caches L1 (Split)")
         cache_main_frame.pack(fill=tk.X, padx=5, pady=5)
         split_cache = ttk.Frame(cache_main_frame)
@@ -222,7 +219,6 @@ HALT
         self.lbl_cache_status = ttk.Label(cache_main_frame, text="Status: IDLE", foreground="blue")
         self.lbl_cache_status.pack()
 
-        # Visualização da Memória
         mem_frame = ttk.LabelFrame(right_frame, text="Memória Principal")
         mem_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
@@ -296,9 +292,6 @@ HALT
                                      capstyle=tk.ROUND, joinstyle=tk.ROUND, tags=tags)
 
     def draw_datapath_layout(self):
-        """
-        Desenha os componentes estáticos do datapath (Registradores, Barramentos, ALU) no canvas.
-        """
         self.canvas.delete("all")
         self.reg_rects = {}
         self.reg_texts = {}
@@ -380,10 +373,6 @@ HALT
         if hasattr(self, 'cpu'): self.update_ui_values_only()
 
     def animate_buses(self):
-        """
-        Anima os barramentos do datapath com base na fase atual do micro-passo.
-        Destaca caminhos ativos para as fases de Busca, Leitura e Execução.
-        """
         if self.anim_job:
             self.root.after_cancel(self.anim_job)
             self.reset_lines()
@@ -393,17 +382,14 @@ HALT
         
         opcode = self.cpu.current_opcode
         
-        # Fase 1: FETCH (PC -> MAR)
         if self.visual_micro_step == 1:
             tags_to_light = ["main_bus_b", "PC_to_b", "bus_c", "c_to_MAR"]
             self.lbl_micro.config(text="Phase: FETCH (PC->MAR)")
 
-        # Fase 2: READ (Memória -> MDR)
         elif self.visual_micro_step == 2:
             tags_to_light = ["ram_addr", "ram_data", "c_to_MDR", "bus_c", "main_bus_c", "PC_to_b", "bus_b"]
             self.lbl_micro.config(text="Phase: READ/INC (Mem->MDR)")
 
-        # Fase 3: EXECUTE (Específico da instrução)
         elif self.visual_micro_step == 0: 
             self.lbl_micro.config(text="Phase: EXECUTE/STORE")
             
@@ -441,6 +427,9 @@ HALT
             self.mem_list.insert(tk.END, f"[{i:03X} | {i:04d}]: {self.fmt_val(0)}")
 
     def update_memory_row(self, idx, is_pc=False, is_sp=False, is_access=False):
+        # Segurança contra index error
+        if idx < 0 or idx >= 4096: return
+        
         val = self.cpu.memory.ram[idx]
         markers = []
         if is_pc: markers.append("PC")
@@ -449,15 +438,18 @@ HALT
         
         text = f"[{idx:03X} | {idx:04d}]: {self.fmt_val(val)}{marker_str}"
         
-        if self.mem_list.get(idx) != text:
-            self.mem_list.delete(idx)
-            self.mem_list.insert(idx, text)
-        
-        bg = "white"
-        if is_access: bg = "#ffffcc"
-        elif is_pc: bg = "#e6f3ff"
-        elif is_sp: bg = "#ffe6e6"
-        self.mem_list.itemconfig(idx, {'bg': bg})
+        # Só atualiza se o texto mudou para evitar flicker
+        try:
+            if self.mem_list.get(idx) != text:
+                self.mem_list.delete(idx)
+                self.mem_list.insert(idx, text)
+            
+            bg = "white"
+            if is_access: bg = "#ffffcc"
+            elif is_pc: bg = "#e6f3ff"
+            elif is_sp: bg = "#ffe6e6"
+            self.mem_list.itemconfig(idx, {'bg': bg})
+        except Exception: pass # Ignora erros de atualização de UI durante shutdown
 
     def update_ui(self, full_refresh=False):
         self.update_ui_values_only()
@@ -479,17 +471,21 @@ HALT
             instr_str = f"{mnemonic} {operand:03X}" if self.display_hex else f"{mnemonic} {operand}"
             self.lbl_curr_instr.config(text=f"Next: [{target_addr:03X}] | {instr_str}")
 
+        # Lista de índices que precisam ser atualizados visualmente
         idxs = {curr_pc, curr_sp, curr_addr, self.prev_pc, self.prev_sp, self.prev_addr}
         idxs.discard(-1)
         
         if full_refresh:
+            # Otimizado: Evita deletar tudo se não necessário, mas no full refresh é seguro
             self.mem_list.delete(0, tk.END)
             for i in range(4096):
                 val = self.cpu.memory.ram[i]
                 self.mem_list.insert(tk.END, f"[{i:03X} | {i:04d}]: {self.fmt_val(val)}")
+            # Reaplica cores nos índices importantes
             for idx in [curr_pc, curr_sp, curr_addr]:
                  if 0 <= idx < 4096: self.update_memory_row(idx, idx==curr_pc, idx==curr_sp, idx==curr_addr)
         else:
+            # Atualização incremental (muito mais rápido)
             for idx in idxs:
                 if 0 <= idx < 4096: self.update_memory_row(idx, idx==curr_pc, idx==curr_sp, idx==curr_addr)
         
@@ -561,10 +557,9 @@ HALT
         messagebox.showinfo("Montagem", f"Sucesso! {count} palavras/instruções carregadas.")
 
     def step_button_action(self):
-        """
-        Lida com o clique no botão 'Step'.
-        Cicla através de 3 fases visuais: Busca -> Leitura -> Execução.
-        """
+        # CORREÇÃO: Impede condições de corrida se já estiver rodando
+        if self.is_running: return
+
         if self.cpu.halted:
             self.is_running = False
             messagebox.showinfo("Fim", "CPU Halt.")

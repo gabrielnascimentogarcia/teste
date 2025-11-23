@@ -15,47 +15,68 @@ OPCODES = {
 
 def assemble(source_code):
     """
-    Converte código fonte assembly em código de máquina (dicionário de endereço: valor).
-    Realiza duas passadas:
-    1. Escaneia rótulos e constrói tabela de símbolos.
-    2. Traduz instruções e resolve símbolos.
+    Converte código fonte assembly em código de máquina.
     """
     lines = source_code.splitlines()
     cleaned_lines = []
     
-    # Passada 0: Pré-processamento e tratamento de .DATA
+    # Pré-passada para capturar labels de .DATA antes de qualquer coisa
+    pre_symbol_table = {}
     data_segment = {}
     
-    for line in lines:
-        line = line.split(';')[0].strip()
-        if not line: continue
+    for i, line in enumerate(lines):
+        raw_line = line.split(';')[0].strip()
+        if not raw_line: continue
         
-        if line.upper().startswith(".DATA"):
-            parts = line.split()
-            if len(parts) >= 3:
-                try:
-                    addr_str = parts[1]
-                    val_str = parts[2]
-                    
-                    if addr_str.upper().startswith("0X"): addr = int(addr_str, 16)
-                    else: addr = int(addr_str)
-                    
-                    if val_str.upper().startswith("0X"): val = int(val_str, 16)
-                    else: val = int(val_str)
-                    
-                    data_segment[addr] = val
-                except ValueError:
-                    return {}, f"Erro na diretiva .DATA: {line}"
-            continue 
-            
-        cleaned_lines.append(line)
+        # Verifica se existe a diretiva .DATA
+        if ".DATA" in raw_line.upper():
+            parts = raw_line.split()
+            try:
+                # Localiza a posição do .DATA na linha
+                data_idx = -1
+                for idx, p in enumerate(parts):
+                    if p.upper() == ".DATA":
+                        data_idx = idx
+                        break
+                
+                if data_idx == -1: continue # Estranho, mas segurança
+                
+                # Verifica argumentos (DATA addr val)
+                if len(parts) < data_idx + 3:
+                    return {}, f"Erro na linha {i+1}: Diretiva .DATA com argumentos insuficientes."
 
-    symbol_table = {}
+                addr_str = parts[data_idx+1]
+                val_str = parts[data_idx+2]
+                
+                # Converte endereço e valor
+                addr = int(addr_str, 16) if addr_str.upper().startswith("0X") else int(addr_str)
+                val = int(val_str, 16) if val_str.upper().startswith("0X") else int(val_str)
+                
+                data_segment[addr] = val
+
+                # Se houver algo antes do .DATA, deve ser um label (ex: VAR: .DATA ...)
+                if data_idx > 0:
+                    label_cand = parts[data_idx-1]
+                    if label_cand.endswith(':'):
+                        label = label_cand[:-1].upper()
+                        pre_symbol_table[label] = addr
+                
+                # Linhas .DATA não vão para cleaned_lines (não são instruções executáveis)
+                continue
+
+            except ValueError:
+                return {}, f"Erro na linha {i+1}: Valor inválido em .DATA"
+            except Exception as e:
+                return {}, f"Erro genérico na linha {i+1}: {e}"
+                
+        cleaned_lines.append((i+1, raw_line)) # Guarda número da linha para erros
+
+    symbol_table = pre_symbol_table.copy()
     temp_program = []
     current_address = 0
     
-    # Passada 1: Construção da Tabela de Símbolos
-    for line in cleaned_lines:
+    # Passada 1: Tabela de Símbolos para Código
+    for lineno, line in cleaned_lines:
         parts = line.split()
         if not parts: continue 
 
@@ -82,6 +103,7 @@ def assemble(source_code):
                 'instr': instruction, 
                 'op': operand, 
                 'addr': current_address,
+                'line': lineno,
                 'orig': line
             })
             current_address += 1
@@ -95,12 +117,14 @@ def assemble(source_code):
             instr = item['instr']
             op = item['op']
             addr = item['addr']
+            lineno = item['line']
 
             if instr not in OPCODES:
-                raise ValueError(f"Instrução desconhecida '{instr}' na linha {addr} ('{item['orig']}')")
+                raise ValueError(f"Instrução desconhecida '{instr}' na linha {lineno}")
 
             base_opcode = OPCODES[instr]
             
+            # Instruções sem operando
             if instr in ['HALT', 'RETN', 'SWAP', 'INSP', 'DESP', 'PUSH', 'POP', 'PSHI', 'POPI']:
                 machine_code_dict[addr] = base_opcode
                 continue
@@ -117,14 +141,14 @@ def assemble(source_code):
                         else:
                             operand_val = int(op)
                     except ValueError:
-                         raise ValueError(f"Operando inválido '{op}' para instrução {instr}")
+                         raise ValueError(f"Operando inválido '{op}' na linha {lineno}")
             
-            # Lida com constantes negativas (complemento de 2 de 12 bits)
+            # Ajuste de sinal (12 bits)
             if operand_val < 0:
                 operand_val = (operand_val + 4096) & 0xFFF
             
             if operand_val > 4095:
-                 raise ValueError(f"Operando {operand_val} excede limite de 12 bits (0-4095)")
+                 raise ValueError(f"Operando {operand_val} excede 12 bits na linha {lineno}")
 
             final_instr = base_opcode | (operand_val & 0x0FFF)
             machine_code_dict[addr] = final_instr
