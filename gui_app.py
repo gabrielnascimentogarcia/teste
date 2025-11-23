@@ -293,6 +293,10 @@ Inicio:
                                      capstyle=tk.ROUND, joinstyle=tk.ROUND, tags=tags)
 
     def draw_datapath_layout(self):
+        """
+        Desenha o Datapath da MIC-1 com correções visuais para o fluxo de dados.
+        (Bus B: Saída dos Registradores | Bus C: Entrada dos Registradores)
+        """
         self.canvas.delete("all")
         self.reg_rects = {}
         self.reg_texts = {}
@@ -306,18 +310,22 @@ Inicio:
         y_start = 40 
         gap_y = 50
         
-        bus_b_x = cx - 120
-        bus_c_x = cx + 120
+        # Coordenadas dos Barramentos
+        bus_b_x = cx - 120  # Esquerda (Bus B)
+        bus_c_x = cx + 120  # Direita (Bus C)
         reg_x   = cx - reg_w // 2
         
         reg_order = ["MAR", "MDR", "PC", "MBR", "SP", "LV", "CPP", "TOS", "OPC", "H"]
         total_h = y_start + len(reg_order) * gap_y + 150
         self.canvas.configure(scrollregion=(0, 0, cw, total_h))
 
+        # Rótulos dos Barramentos
         self.canvas.create_text(bus_b_x - 20, y_start - 20, text="Bus B", font=("Arial", 9, "bold"), fill="#555")
         self.canvas.create_text(bus_c_x + 20, y_start - 20, text="Bus C", font=("Arial", 9, "bold"), fill="#555")
         
         bus_bottom_y = y_start + len(reg_order) * gap_y + 20
+        
+        # Desenha as linhas verticais principais dos barramentos
         self.bus_ids['main_bus_b'] = self.draw_line((bus_b_x, y_start, bus_b_x, bus_bottom_y), width=4, tags="bus_b")
         self.bus_ids['main_bus_c'] = self.draw_line((bus_c_x, y_start, bus_c_x, bus_bottom_y + 60), width=4, tags="bus_c")
 
@@ -329,45 +337,68 @@ Inicio:
             y = y_start + i * gap_y
             self.draw_box(reg_x, y, reg_w, reg_h, name, get_reg(name))
             
-            self.bus_ids[f'c_to_{name}'] = self.draw_line((bus_c_x, y + reg_h/2, reg_x + reg_w, y + reg_h/2), 
-                                                          arrow=tk.LAST, tags="bus_c")
+            # --- CONEXÃO BUS C (Escrita) ---
+            # Do Bus C (Direita) para o Registrador (Centro).
+            self.bus_ids[f'c_to_{name}'] = self.draw_line(
+                (bus_c_x, y + reg_h/2, reg_x + reg_w, y + reg_h/2), 
+                arrow=tk.LAST, tags="bus_c"
+            )
             
+            # --- CONEXÃO BUS B (Leitura) ---
+            # Do Registrador (Centro) para o Bus B (Esquerda).
+            # CORREÇÃO: MAR e H NÃO se conectam ao Bus B na MIC-1 padrão.
             if name not in ["MAR", "H"]:
-                self.bus_ids[f'{name}_to_b'] = self.draw_line((reg_x, y + reg_h/2, bus_b_x, y + reg_h/2), 
-                                                              arrow=tk.LAST, tags="bus_b")
+                self.bus_ids[f'{name}_to_b'] = self.draw_line(
+                    (reg_x, y + reg_h/2, bus_b_x, y + reg_h/2), 
+                    arrow=tk.LAST, tags="bus_b"
+                )
 
+        # --- Conexões da ALU e Shifter ---
         h_y = y_start + (len(reg_order)-1) * gap_y
         alu_in_a_x = cx - 20
         alu_y = bus_bottom_y
         
-        self.bus_ids['h_to_alu_a'] = self.draw_line((reg_x, h_y + reg_h, reg_x + 20, h_y + reg_h + 20, alu_in_a_x, alu_y), 
-                                                    width=3, arrow=tk.LAST, tags="bus_a")
+        # H conecta na entrada A da ALU (não no Bus B)
+        self.bus_ids['h_to_alu_a'] = self.draw_line(
+            (reg_x, h_y + reg_h, reg_x + 20, h_y + reg_h + 20, alu_in_a_x, alu_y), 
+            width=3, arrow=tk.LAST, tags="bus_a"
+        )
         self.canvas.create_text(reg_x - 30, h_y + reg_h + 10, text="Bus A", font=("Arial", 8, "bold"), fill="#555")
 
+        # Desenho da ALU
         self.canvas.create_polygon(cx-40, alu_y, cx+40, alu_y, cx+20, alu_y+50, cx-20, alu_y+50, 
                                    fill="#ffcccb", outline="black", width=2)
         self.canvas.create_text(cx, alu_y+25, text="ALU", font=("Arial", 11, "bold"))
         
+        # Bus B conecta na entrada B da ALU
         self.draw_line((bus_b_x, bus_bottom_y, cx-30, bus_bottom_y), arrow=tk.LAST, tags="bus_b")
 
+        # Shifter
         shift_y = alu_y + 60
         self.canvas.create_rectangle(cx-30, shift_y, cx+30, shift_y+30, fill="#add8e6", outline="black")
         self.canvas.create_text(cx, shift_y+15, text="Shifter", font=("Arial", 9))
         
+        # ALU -> Shifter
         self.canvas.create_line(cx, alu_y+50, cx, shift_y, width=4, fill="gray")
         
+        # Shifter -> Bus C (Loopback)
         self.draw_line((cx, shift_y+30, cx, shift_y+45, bus_c_x, shift_y+45, bus_c_x, bus_bottom_y + 60), 
                        width=4, arrow=tk.LAST, tags="bus_c")
 
+        # --- Memória (RAM) ---
         ram_x = bus_b_x - 80
         ram_y = y_start
         self.canvas.create_rectangle(ram_x, ram_y, ram_x + 60, ram_y + gap_y + reg_h, fill="#fff0b3", outline="black")
         self.canvas.create_text(ram_x + 30, ram_y + gap_y, text="RAM", font=("Arial", 10, "bold"))
         
+        # MAR -> Address Bus -> RAM
         self.draw_line((reg_x, y_start + 10, ram_x + 60, y_start + 10), arrow=tk.LAST, color="black", width=1, tags="ram_addr")
+        
+        # MDR <-> Data Bus <-> RAM
         mdr_y = y_start + gap_y
         self.draw_line((ram_x + 60, mdr_y + 20, reg_x, mdr_y + 20), arrow=tk.BOTH, color="black", width=1, tags="ram_data")
 
+        # Label de Controle
         sig = self.cpu.control_signals if hasattr(self, 'cpu') else "RESET"
         self.control_label_id = self.canvas.create_text(cx, 20, text=sig, fill="red", font=("Consolas", 14, "bold"), anchor="center")
 
