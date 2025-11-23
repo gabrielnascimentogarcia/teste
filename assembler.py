@@ -1,6 +1,6 @@
 """
-Módulo Assembler para a arquitetura MAC-1 v5.1.
-Case-insensitive e robusto contra espaços em branco.
+Módulo Assembler para a arquitetura MIC-1/MAC-1.
+Lida com o processo de montagem em duas passadas: geração da Tabela de Símbolos e Geração de Código.
 """
 
 OPCODES = {
@@ -14,29 +14,55 @@ OPCODES = {
 }
 
 def assemble(source_code):
+    """
+    Converte código fonte assembly em código de máquina (dicionário de endereço: valor).
+    Realiza duas passadas:
+    1. Escaneia rótulos e constrói tabela de símbolos.
+    2. Traduz instruções e resolve símbolos.
+    """
     lines = source_code.splitlines()
     cleaned_lines = []
     
-    # Remove comentários e linhas vazias (agora com .strip() reforçado)
+    # Passada 0: Pré-processamento e tratamento de .DATA
+    data_segment = {}
+    
     for line in lines:
         line = line.split(';')[0].strip()
-        if line:
-            cleaned_lines.append(line)
+        if not line: continue
+        
+        if line.upper().startswith(".DATA"):
+            parts = line.split()
+            if len(parts) >= 3:
+                try:
+                    addr_str = parts[1]
+                    val_str = parts[2]
+                    
+                    if addr_str.upper().startswith("0X"): addr = int(addr_str, 16)
+                    else: addr = int(addr_str)
+                    
+                    if val_str.upper().startswith("0X"): val = int(val_str, 16)
+                    else: val = int(val_str)
+                    
+                    data_segment[addr] = val
+                except ValueError:
+                    return {}, f"Erro na diretiva .DATA: {line}"
+            continue 
+            
+        cleaned_lines.append(line)
 
     symbol_table = {}
     temp_program = []
     current_address = 0
     
-    # 1. Passada: Tabela de Símbolos
+    # Passada 1: Construção da Tabela de Símbolos
     for line in cleaned_lines:
         parts = line.split()
-        if not parts: continue # Segurança extra
+        if not parts: continue 
 
         label = None
         instruction = None
         operand = None
 
-        # Detecta label
         if parts[0].endswith(':'):
             label = parts[0][:-1].upper()
             symbol_table[label] = current_address
@@ -60,10 +86,10 @@ def assemble(source_code):
             })
             current_address += 1
 
-    machine_code = []
+    machine_code_dict = data_segment.copy()
     error_msg = "Sucesso"
 
-    # 2. Passada: Tradução
+    # Passada 2: Geração de Código
     try:
         for item in temp_program:
             instr = item['instr']
@@ -76,7 +102,7 @@ def assemble(source_code):
             base_opcode = OPCODES[instr]
             
             if instr in ['HALT', 'RETN', 'SWAP', 'INSP', 'DESP', 'PUSH', 'POP', 'PSHI', 'POPI']:
-                machine_code.append(base_opcode)
+                machine_code_dict[addr] = base_opcode
                 continue
 
             operand_val = 0
@@ -93,6 +119,7 @@ def assemble(source_code):
                     except ValueError:
                          raise ValueError(f"Operando inválido '{op}' para instrução {instr}")
             
+            # Lida com constantes negativas (complemento de 2 de 12 bits)
             if operand_val < 0:
                 operand_val = (operand_val + 4096) & 0xFFF
             
@@ -100,9 +127,9 @@ def assemble(source_code):
                  raise ValueError(f"Operando {operand_val} excede limite de 12 bits (0-4095)")
 
             final_instr = base_opcode | (operand_val & 0x0FFF)
-            machine_code.append(final_instr)
+            machine_code_dict[addr] = final_instr
 
     except Exception as e:
-        return [], str(e)
+        return {}, str(e)
 
-    return machine_code, error_msg
+    return machine_code_dict, error_msg

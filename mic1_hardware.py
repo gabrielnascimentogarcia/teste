@@ -1,7 +1,32 @@
 import random
 
+class Opcode:
+    """
+    Define códigos de operação para a arquitetura MIC-1.
+    Mapeia mnemônicos para sua representação inteira de 4 bits.
+    """
+    LODD = 0x0
+    STOD = 0x1
+    ADDD = 0x2
+    SUBD = 0x3
+    JPOS = 0x4
+    JZER = 0x5
+    JUMP = 0x6
+    LOCO = 0x7
+    LODL = 0x8
+    STOL = 0x9
+    ADDL = 0xA
+    SUBL = 0xB
+    JNEG = 0xC
+    JNZE = 0xD
+    CALL = 0xE
+    EXT  = 0xF
+
 class Register:
-    """Representa um registrador de 16 bits com comportamento cíclico (wrap-around)."""
+    """
+    Simula um registrador de hardware de 16 bits com comportamento cíclico (wrap-around).
+    Garante que os valores permaneçam dentro de [0, 65535].
+    """
     def __init__(self, name, value=0):
         self.name = name
         self._value = value 
@@ -17,9 +42,11 @@ class Register:
     def __repr__(self):
         return f"[{self.name}: {self.value:04X}]"
 
-
 class Cache:
-    """Classe genérica para Cache (I-Cache ou D-Cache)."""
+    """
+    Implementa um sistema de linha de cache mapeada diretamente.
+    Usado tanto para Instrução (I-Cache) quanto para Dados (D-Cache).
+    """
     def __init__(self, size=16, name="L1"):
         self.lines = [{'valid': False, 'tag': 0, 'data': 0} for _ in range(size)]
         self.size = size
@@ -29,6 +56,10 @@ class Cache:
         self.miss_count = 0
 
     def read(self, real_addr, ram_memory):
+        """
+        Lê dados da cache se a tag corresponder (HIT), caso contrário busca na RAM (MISS).
+        Atualiza contadores de hit/miss e estado da cache.
+        """
         index = real_addr % self.size
         tag = real_addr // self.size
         line = self.lines[index]
@@ -47,11 +78,14 @@ class Cache:
             return val
 
     def write_through(self, real_addr, value):
+        """
+        Atualiza a cache apenas se o bloco já estiver presente (política Write No-Allocate).
+        Sempre assume que o chamador atualiza a RAM separadamente (Write-Through).
+        """
         index = real_addr % self.size
         tag = real_addr // self.size
         line = self.lines[index]
 
-        # Só atualiza se já estiver na cache (Write No-Allocate)
         if line['valid'] and line['tag'] == tag:
             line['data'] = value
             self.last_status = "WRITE HIT"
@@ -63,9 +97,11 @@ class Cache:
             line['valid'] = False
         self.last_status = "FLUSHED"
 
-
 class MemorySystem:
-    """Simula RAM (4096 palavras) e Caches separadas."""
+    """
+    Gerencia a memória principal de 4096 palavras e caches L1 associadas.
+    Lida com mascaramento de endereço e roteamento de acesso à memória.
+    """
     def __init__(self, size=4096, cache_size=8):
         self.size = size
         self.ram = [0] * size
@@ -90,30 +126,47 @@ class MemorySystem:
         real_addr = self._mask_addr(address)
         value &= 0xFFFF
         self.last_accessed_addr = real_addr
-        
         self.ram[real_addr] = value
         self.d_cache.write_through(real_addr, value)
 
     def load_program(self, machine_code):
+        """
+        Carrega código de máquina na RAM.
+        Suporta carregamento esparso via dicionário (endereço: valor) ou lista sequencial.
+        """
         self.ram = [0] * self.size
-        for i, code in enumerate(machine_code):
-            if i < len(self.ram):
-                self.ram[i] = code
+        
+        if isinstance(machine_code, dict):
+            for addr, val in machine_code.items():
+                if 0 <= addr < self.size:
+                    self.ram[addr] = val
+        else:
+            for i, code in enumerate(machine_code):
+                if i < len(self.ram):
+                    self.ram[i] = code
         self.flush_caches()
 
     def flush_caches(self):
         self.i_cache.flush()
         self.d_cache.flush()
 
-
 class ALU:
+    """
+    Unidade Lógica e Aritmética.
+    Realiza operações de 16 bits e atualiza as flags N (Negativo) e Z (Zero).
+    """
     def __init__(self):
         self.n_flag = False 
         self.z_flag = False
         self.last_result = 0
 
     def compute(self, a, b, op):
+        """
+        Executa a operação solicitada.
+        Lida com aritmética com sinal de 16 bits convertendo para int python, operando e mascarando de volta.
+        """
         res = 0
+        # Converte inteiro sem sinal de 16 bits para com sinal para aritmética correta
         a_signed = a if a < 0x8000 else a - 0x10000
         b_signed = b if b < 0x8000 else b - 0x10000
         
@@ -126,6 +179,8 @@ class ALU:
         elif op == 'INC_A': res = a_signed + 1
         elif op == 'DEC_A': res = a_signed - 1
         elif op == 'INV_A': res = ~a
+        elif op == 'LSHIFT': res = a << 1
+        elif op == 'RSHIFT': res = a >> 1
         
         self.last_result = res & 0xFFFF
         self.z_flag = (self.last_result == 0)
@@ -133,23 +188,29 @@ class ALU:
         return self.last_result
 
 class Mic1CPU:
+    """
+    Implementação do núcleo da CPU para MIC-1.
+    Gerencia registradores, interação com memória e o ciclo de instrução (Busca-Decodificação-Execução).
+    """
     def __init__(self):
         self.mar = Register("MAR")
         self.mdr = Register("MDR")
         self.pc  = Register("PC")
         self.mbr = Register("MBR")
         self.sp  = Register("SP")
+        self.opc = Register("OPC")
+        self.h   = Register("H") 
+        
         self.lv  = Register("LV")
         self.cpp = Register("CPP")
         self.tos = Register("TOS")
-        self.opc = Register("OPC")
-        self.h   = Register("H") 
 
         self.memory = MemorySystem()
         self.alu = ALU()
         self.halted = False
         self.cycle_count = 0
         self.control_signals = "RESET"
+        self.current_opcode = -1
         
         self.bus_activity = {
             'bus_a': False, 'bus_b': False, 'bus_c': False, 
@@ -168,15 +229,21 @@ class Mic1CPU:
         self.halted = False
         self.cycle_count = 0
         self.control_signals = "RESET"
+        self.current_opcode = -1
         self.clear_bus_activity()
 
     def clear_bus_activity(self):
         for k in self.bus_activity: self.bus_activity[k] = False
 
     def fetch_cycle(self):
-        # CORREÇÃO: Atualizar OPC (Old PC) com o PC atual antes de incrementar
+        """
+        Realiza o ciclo de busca padrão:
+        1. PC -> MAR
+        2. Ler Memória -> MDR -> MBR
+        3. Incremento de PC
+        4. Extrair Opcode
+        """
         self.opc.value = self.pc.value
-        
         self.mar.value = self.pc.value
         self.clear_bus_activity()
         self.bus_activity['bus_b'] = True 
@@ -186,115 +253,122 @@ class Mic1CPU:
         self.pc.value += 1
         self.mdr.value = val
         self.mbr.value = self.mdr.value 
-        return self.mbr.value >> 12 
+        
+        self.current_opcode = self.mbr.value >> 12
+        return self.current_opcode
 
     def execute_instruction(self):
+        """
+        Decodifica e executa a instrução atual com base no opcode.
+        Atualiza sinais de controle e atividade do barramento para visualização.
+        """
         if self.halted: return
         opcode = self.fetch_cycle()
         addr_field = self.mbr.value & 0x0FFF
         op_bin = f"{opcode:04b}"
         self.control_signals = f"Op: {op_bin}"
 
-        if opcode == 0x0: # LODD
+        if opcode == Opcode.LODD:
             val = self.memory.read_data(addr_field)
             self.h.value = self.alu.compute(val, 0, 'A') 
             self.control_signals = f"LODD: AC <- Mem[{addr_field:03X}]"
             self.bus_activity['mem_read'] = True; self.bus_activity['bus_c'] = True
 
-        elif opcode == 0x1: # STOD
+        elif opcode == Opcode.STOD:
             self.memory.write(addr_field, self.h.value)
             self.control_signals = f"STOD: Mem[{addr_field:03X}] <- AC"
             self.bus_activity['mem_write'] = True; self.bus_activity['bus_b'] = True
 
-        elif opcode == 0x2: # ADDD
+        elif opcode == Opcode.ADDD:
             mem_val = self.memory.read_data(addr_field)
             res = self.alu.compute(self.h.value, mem_val, 'ADD')
             self.h.value = res
             self.control_signals = f"ADDD"
             self.bus_activity['bus_a'] = True; self.bus_activity['bus_b'] = True; self.bus_activity['bus_c'] = True
 
-        elif opcode == 0x3: # SUBD
+        elif opcode == Opcode.SUBD:
             mem_val = self.memory.read_data(addr_field)
             res = self.alu.compute(self.h.value, mem_val, 'SUB')
             self.h.value = res
             self.control_signals = f"SUBD"
             self.bus_activity['bus_a'] = True; self.bus_activity['bus_b'] = True; self.bus_activity['bus_c'] = True
 
-        elif opcode == 0x4: # JPOS
+        elif opcode == Opcode.JPOS:
             if not self.alu.n_flag and not self.alu.z_flag:
                 self.pc.value = addr_field
                 self.control_signals = "JPOS (Taken)"
             else: self.control_signals = "JPOS (Not Taken)"
             self.bus_activity['bus_c'] = True
 
-        elif opcode == 0x5: # JZER
+        elif opcode == Opcode.JZER:
             if self.alu.z_flag:
                 self.pc.value = addr_field
                 self.control_signals = "JZER (Taken)"
             else: self.control_signals = "JZER (Not Taken)"
             self.bus_activity['bus_c'] = True
 
-        elif opcode == 0x6: # JUMP
+        elif opcode == Opcode.JUMP:
             self.pc.value = addr_field
             self.control_signals = "JUMP"
             self.bus_activity['bus_c'] = True
 
-        elif opcode == 0x7: # LOCO
+        elif opcode == Opcode.LOCO:
             const_val = addr_field
+            # Extensão de sinal para constante de 12 bits
             if const_val & 0x800: const_val -= 0x1000 
             self.h.value = self.alu.compute(const_val, 0, 'A') 
             self.control_signals = f"LOCO: AC <- {const_val}"
             self.bus_activity['bus_c'] = True
 
-        elif opcode == 0x8: # LODL
+        elif opcode == Opcode.LODL:
             eff_addr = (self.sp.value + addr_field) & 0xFFF 
             val = self.memory.read_data(eff_addr)
             self.h.value = self.alu.compute(val, 0, 'A')
             self.control_signals = f"LODL"
             self.bus_activity['mem_read'] = True; self.bus_activity['bus_b'] = True; self.bus_activity['bus_c'] = True
 
-        elif opcode == 0x9: # STOL
+        elif opcode == Opcode.STOL:
             eff_addr = (self.sp.value + addr_field) & 0xFFF
             self.memory.write(eff_addr, self.h.value)
             self.control_signals = f"STOL"
             self.bus_activity['mem_write'] = True; self.bus_activity['bus_b'] = True
 
-        elif opcode == 0xA: # ADDL
+        elif opcode == Opcode.ADDL:
             eff_addr = (self.sp.value + addr_field) & 0xFFF
             mem_val = self.memory.read_data(eff_addr)
             self.h.value = self.alu.compute(self.h.value, mem_val, 'ADD')
             self.control_signals = "ADDL"
             self.bus_activity['mem_read'] = True; self.bus_activity['bus_a'] = True; self.bus_activity['bus_c'] = True
 
-        elif opcode == 0xB: # SUBL
+        elif opcode == Opcode.SUBL:
             eff_addr = (self.sp.value + addr_field) & 0xFFF
             mem_val = self.memory.read_data(eff_addr)
             self.h.value = self.alu.compute(self.h.value, mem_val, 'SUB')
             self.control_signals = "SUBL"
             self.bus_activity['mem_read'] = True; self.bus_activity['bus_a'] = True; self.bus_activity['bus_c'] = True
             
-        elif opcode == 0xC: # JNEG
+        elif opcode == Opcode.JNEG:
             if self.alu.n_flag:
                 self.pc.value = addr_field
                 self.control_signals = "JNEG (Taken)"
             else: self.control_signals = "JNEG (Not Taken)"
             self.bus_activity['bus_c'] = True
 
-        elif opcode == 0xD: # JNZE
+        elif opcode == Opcode.JNZE:
             if not self.alu.z_flag:
                 self.pc.value = addr_field
                 self.control_signals = "JNZE (Taken)"
             else: self.control_signals = "JNZE (Not Taken)"
             self.bus_activity['bus_c'] = True
 
-        elif opcode == 0xE: # CALL
+        elif opcode == Opcode.CALL:
             self.sp.value -= 1
             self.memory.write(self.sp.value, self.pc.value)
             self.pc.value = addr_field
             self.control_signals = f"CALL {addr_field:03X}"
             self.bus_activity['mem_write'] = True; self.bus_activity['bus_c'] = True
 
-        elif opcode == 0xF:
+        elif opcode == Opcode.EXT:
             func = addr_field
             if func == 0: # HALT
                 self.halted = True
@@ -344,4 +418,5 @@ class Mic1CPU:
                 self.control_signals = "DESP"
             else:
                 self.control_signals = f"NOP / Unknown F{func:03X}"
+        
         self.cycle_count += 1
