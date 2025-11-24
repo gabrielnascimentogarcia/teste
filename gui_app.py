@@ -106,7 +106,7 @@ class Mic1GUI:
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 / MAC-1 v6.2 (Polido)")
+        self.root.title("Simulador MIC-1 / MAC-1 v6.3 (Corrigido)")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -416,6 +416,8 @@ Fim:
 
         if self.anim_job:
             self.root.after_cancel(self.anim_job)
+        
+        if not hasattr(self, 'cpu'): return
 
         active_color = "#FF4444"
         tags_to_light = []
@@ -586,8 +588,8 @@ Fim:
         self.canvas.itemconfig(self.control_label_id, text=self.cpu.control_signals)
         self.lbl_cycle.config(text=f"Cycles: {self.cpu.cycle_count} | Flags: N={int(self.cpu.alu.n_flag)} Z={int(self.cpu.alu.z_flag)}")
         
-        if not self.is_running:
-            self.animate_buses()
+        # CORREÇÃO: A animação deve rodar mesmo se estiver em modo automático (is_running)
+        self.animate_buses()
 
     def edit_memory_value(self, event):
         sel = self.mem_list.curselection()
@@ -682,26 +684,18 @@ Fim:
             self.is_running = False
             return
 
-        # Correção Crítica: Se estivermos no meio de um micro-passo, 
-        # terminamos ele antes de iniciar ciclos completos.
-        if self.visual_micro_step != 0:
-            cycle_completed = self.perform_micro_step()
-            # Se ainda não completou o ciclo, agendamos o próximo micro-step mais rápido
-            # para dar fluidez até voltar ao estado zero.
-            delay = max(50, self.run_speed_ms // 4)
-            self.root.after(delay, self.run_loop)
-            return
-
-        # Se chegamos aqui, visual_micro_step é 0. Execução normal.
-        self.cpu.execute_full_cycle() 
-        self.visual_micro_step = 0 
-        self.update_ui_values_only() 
+        # CORREÇÃO: Usamos perform_micro_step repetidamente para garantir que
+        # a animação de cada fase (Fetch, Decode, Execute) seja renderizada.
+        # Anteriormente, execute_full_cycle() rodava tudo de uma vez, 
+        # impedindo a visualização do fluxo de dados.
         
-        self.update_memory_row(self.cpu.pc.value, True, False, False)
-        if self.prev_pc != self.cpu.pc.value:
-                self.update_memory_row(self.prev_pc, False, False, False)
-                self.prev_pc = self.cpu.pc.value
+        cycle_completed = self.perform_micro_step()
         
+        # Opcional: Garante que o PC seja seguido mesmo durante o Run rápido
+        if self.follow_pc.get() and not self.user_interacting:
+             self.mem_list.see(self.cpu.pc.value)
+        
+        # Agenda o próximo passo. O "speed" agora controla a velocidade dos micro-passos.
         self.root.after(self.run_speed_ms, self.run_loop)
 
     def stop_run(self): 
