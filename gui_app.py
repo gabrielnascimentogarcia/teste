@@ -14,18 +14,15 @@ class CodeEditor(tk.Frame):
                                     background='#f0f0f0', state='disabled', font=("Consolas", 10))
         self.line_numbers.pack(side=tk.LEFT, fill=tk.Y)
         
-        # Correção: wrap="none" para evitar quebra de linha visual que dessincroniza os números
         self.text_area = tk.Text(self, font=("Consolas", 10), undo=True, wrap="none")
         self.text_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.sync_scroll)
         self.vsb.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Adição de Scrollbar Horizontal
         self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text_area.xview)
         self.hsb.pack(side=tk.BOTTOM, fill=tk.X)
         self.text_area['xscrollcommand'] = self.hsb.set
-
         self.text_area['yscrollcommand'] = self.on_text_scroll
 
         self.text_area.tag_configure("keyword", foreground="blue", font=("Consolas", 10, "bold"))
@@ -109,7 +106,7 @@ class Mic1GUI:
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 / MAC-1 v5.8 (Corrigido)")
+        self.root.title("Simulador MIC-1 / MAC-1 v6.0 (Final)")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -117,8 +114,6 @@ class Mic1GUI:
         self.display_hex = True 
         self.run_speed_ms = 500
         self.anim_job = None
-        
-        # 0: Idle, 1: Fetch, 2: Decode, 3: Execute, 4: WriteBack
         self.visual_micro_step = 0 
         
         self.follow_pc = tk.BooleanVar(value=True)
@@ -142,16 +137,27 @@ class Mic1GUI:
         self.editor.pack(fill=tk.BOTH, expand=True, padx=2)
         
         default_code = """; --- ÁREA DE DADOS ---
-PRECO:  .DATA 100 50   
-FRETE:  .DATA 101 10   
+PRECO:  .DATA 100 20   
+FRETE:  .DATA 101 50   
 TOTAL:  .DATA 102 0    
 
 ; --- INÍCIO DO PROGRAMA ---
 Inicio:
-    LODD PRECO   ; Busca valor de PRECO
-    ADDD FRETE   ; Soma FRETE
-    STOD TOTAL   ; Salva em TOTAL
-    HALT         ; Fim
+    LODD PRECO   ; Busca valor de PRECO (20)
+    SUBD FRETE   ; Subtrai FRETE (20 - 50 = -30)
+    JPOS Maior   ; Se AC > 0, Pula (Não deve pular pois é negativo)
+    
+    ; Se chegou aqui, é menor ou igual
+    LOCO 1       ; Carrega 1 para indicar "Menor/Igual"
+    STOD TOTAL
+    JUMP Fim
+
+Maior:
+    LOCO 2       ; Carrega 2 para indicar "Maior"
+    STOD TOTAL
+
+Fim:
+    HALT
 """
         self.editor.set_code(default_code)
         ttk.Button(left_frame, text="Montar (Assemble)", command=self.assemble_code).pack(fill=tk.X, pady=5)
@@ -299,7 +305,7 @@ Inicio:
 
     def draw_datapath_layout(self):
         """
-        Desenha o Datapath da MIC-1 com correções visuais para o fluxo de dados.
+        Desenha o Datapath da MIC-1.
         """
         self.canvas.delete("all")
         self.reg_rects = {}
@@ -314,22 +320,19 @@ Inicio:
         y_start = 40 
         gap_y = 50
         
-        # Coordenadas dos Barramentos
-        bus_b_x = cx - 120  # Esquerda (Bus B)
-        bus_c_x = cx + 120  # Direita (Bus C)
+        bus_b_x = cx - 120 
+        bus_c_x = cx + 120
         reg_x   = cx - reg_w // 2
         
         reg_order = ["MAR", "MDR", "PC", "MBR", "SP", "LV", "CPP", "TOS", "OPC", "H"]
         total_h = y_start + len(reg_order) * gap_y + 150
         self.canvas.configure(scrollregion=(0, 0, cw, total_h))
 
-        # Rótulos dos Barramentos
         self.canvas.create_text(bus_b_x - 20, y_start - 20, text="Bus B", font=("Arial", 9, "bold"), fill="#555")
         self.canvas.create_text(bus_c_x + 20, y_start - 20, text="Bus C", font=("Arial", 9, "bold"), fill="#555")
         
         bus_bottom_y = y_start + len(reg_order) * gap_y + 20
         
-        # Desenha as linhas verticais principais dos barramentos
         self.bus_ids['main_bus_b'] = self.draw_line((bus_b_x, y_start, bus_b_x, bus_bottom_y), width=4, tags="main_bus_b")
         self.bus_ids['main_bus_c'] = self.draw_line((bus_c_x, y_start, bus_c_x, bus_bottom_y + 60), width=4, tags="main_bus_c")
 
@@ -341,65 +344,53 @@ Inicio:
             y = y_start + i * gap_y
             self.draw_box(reg_x, y, reg_w, reg_h, name, get_reg(name))
             
-            # --- CONEXÃO BUS C (Escrita) ---
             self.bus_ids[f'c_to_{name}'] = self.draw_line(
                 (bus_c_x, y + reg_h/2, reg_x + reg_w, y + reg_h/2), 
                 arrow=tk.LAST, tags=f"c_to_{name}"
             )
             
-            # --- CONEXÃO BUS B (Leitura) ---
             if name not in ["MAR", "H"]:
                 self.bus_ids[f'{name}_to_b'] = self.draw_line(
                     (reg_x, y + reg_h/2, bus_b_x, y + reg_h/2), 
                     arrow=tk.LAST, tags=f"{name}_to_b"
                 )
 
-        # --- Conexões da ALU e Shifter ---
         h_y = y_start + (len(reg_order)-1) * gap_y
         alu_in_a_x = cx - 20
         alu_y = bus_bottom_y
         
-        # H conecta na entrada A da ALU (não no Bus B)
         self.bus_ids['h_to_alu_a'] = self.draw_line(
             (reg_x, h_y + reg_h, reg_x + 20, h_y + reg_h + 20, alu_in_a_x, alu_y), 
             width=3, arrow=tk.LAST, tags="h_to_alu_a"
         )
         self.canvas.create_text(reg_x - 30, h_y + reg_h + 10, text="Bus A", font=("Arial", 8, "bold"), fill="#555")
 
-        # Desenho da ALU
+        # ALU (Forma Gráfica)
         self.canvas.create_polygon(cx-40, alu_y, cx+40, alu_y, cx+20, alu_y+50, cx-20, alu_y+50, 
                                    fill="#ffcccb", outline="black", width=2)
         self.canvas.create_text(cx, alu_y+25, text="ALU", font=("Arial", 11, "bold"))
         
-        # Bus B conecta na entrada B da ALU
         self.draw_line((bus_b_x, bus_bottom_y, cx-30, bus_bottom_y), arrow=tk.LAST, tags="bus_b_to_alu")
 
-        # Shifter
         shift_y = alu_y + 60
         self.canvas.create_rectangle(cx-30, shift_y, cx+30, shift_y+30, fill="#add8e6", outline="black")
         self.canvas.create_text(cx, shift_y+15, text="Shifter", font=("Arial", 9))
         
-        # ALU -> Shifter
         self.canvas.create_line(cx, alu_y+50, cx, shift_y, width=4, fill="gray", tags="alu_to_shifter")
         
-        # Shifter -> Bus C (Loopback)
         self.draw_line((cx, shift_y+30, cx, shift_y+45, bus_c_x, shift_y+45, bus_c_x, bus_bottom_y + 60), 
                        width=4, arrow=tk.LAST, tags="bus_c")
 
-        # --- Memória (RAM) ---
         ram_x = bus_b_x - 80
         ram_y = y_start
         self.canvas.create_rectangle(ram_x, ram_y, ram_x + 60, ram_y + gap_y + reg_h, fill="#fff0b3", outline="black")
         self.canvas.create_text(ram_x + 30, ram_y + gap_y, text="RAM", font=("Arial", 10, "bold"))
         
-        # MAR -> Address Bus -> RAM
         self.draw_line((reg_x, y_start + 10, ram_x + 60, y_start + 10), arrow=tk.LAST, color="black", width=1, tags="ram_addr")
         
-        # MDR <-> Data Bus <-> RAM
         mdr_y = y_start + gap_y
         self.draw_line((ram_x + 60, mdr_y + 20, reg_x, mdr_y + 20), arrow=tk.BOTH, color="black", width=1, tags="ram_data")
 
-        # Label de Controle
         sig = self.cpu.control_signals if hasattr(self, 'cpu') else "RESET"
         self.control_label_id = self.canvas.create_text(cx, 20, text=sig, fill="red", font=("Consolas", 14, "bold"), anchor="center")
 
@@ -416,34 +407,28 @@ Inicio:
         opcode = self.cpu.current_opcode
         step = self.visual_micro_step
         
-        # Atualização: Consulta o estado real do hardware sempre que possível
         bus_activity = self.cpu.bus_activity
 
         if step == 1: 
-            # Subciclo 1: Busca de Endereço (PC -> MAR)
             tags_to_light = ["main_bus_b", "PC_to_b", "main_bus_c", "bus_c", "c_to_MAR"]
             self.lbl_micro.config(text="1. BUSCA (PC -> MAR)")
 
         elif step == 2:
-            # Subciclo 2: Leitura de Memória (Mem -> MDR -> MBR)
             tags_to_light = []
             if bus_activity['mem_read']: tags_to_light += ["ram_addr", "ram_data"]
             tags_to_light += ["c_to_MDR", "main_bus_c", "bus_c", "c_to_MBR"]
             self.lbl_micro.config(text="2. DECODE (Mem -> MDR/MBR)")
 
         elif step == 3:
-            # Subciclo 3: Execução (Carrega dados para ALU)
             self.lbl_micro.config(text="3. EXECUTE (ALU Input)")
             
-            # Checa atividades de barramento reais
             if bus_activity['bus_b']: tags_to_light.append("main_bus_b")
             if bus_activity['bus_b']: tags_to_light.append("bus_b_to_alu")
-            if bus_activity['bus_a']: tags_to_light.append("h_to_alu_a") # H é sempre A na ALU
+            if bus_activity['bus_a']: tags_to_light.append("h_to_alu_a") 
 
-            # Adições didáticas baseadas no Opcode para origem exata dos dados (hardware abstrai mux)
             if opcode in [Opcode.ADDD, Opcode.SUBD, Opcode.LODD, Opcode.ADDL, Opcode.SUBL]:
                  tags_to_light += ["MDR_to_b", "h_to_alu_a"]
-                 if bus_activity['mem_read']: tags_to_light.append("ram_data") # Visual apenas
+                 if bus_activity['mem_read']: tags_to_light.append("ram_data") 
             elif opcode == Opcode.STOD:
                  tags_to_light += ["h_to_alu_a"]
             elif opcode in [Opcode.LOCO, Opcode.JUMP, Opcode.JPOS, Opcode.JZER, Opcode.JNEG, Opcode.JNZE]:
@@ -452,13 +437,11 @@ Inicio:
                  tags_to_light += ["SP_to_b", "h_to_alu_a"]
 
         elif step == 4:
-            # Subciclo 4: Escrita (ALU Output -> Reg/Mem)
             self.lbl_micro.config(text="4. WRITE BACK (Result -> Dest)")
             
             base_tags = ["alu_to_shifter", "main_bus_c", "bus_c"]
             tags_to_light = base_tags[:]
             
-            # Usa hardware para validar se houve escrita em memória
             if bus_activity['mem_write']: tags_to_light += ["ram_addr", "ram_data"]
             
             if opcode in [Opcode.LODD, Opcode.ADDD, Opcode.SUBD, Opcode.LOCO, Opcode.LODL, Opcode.ADDL, Opcode.SUBL]:
@@ -482,7 +465,6 @@ Inicio:
     def reset_lines(self):
         for t in ["main_bus_b", "main_bus_c", "bus_c", "bus_a", "h_to_alu_a", "bus_b_to_alu", "alu_to_shifter"]: 
             self.canvas.itemconfig(t, fill="gray")
-        # Reseta todas as conexões específicas
         for item in self.canvas.find_all():
             tags = self.canvas.gettags(item)
             for t in tags:
@@ -582,7 +564,9 @@ Inicio:
 
         self.canvas.itemconfig(self.control_label_id, text=self.cpu.control_signals)
         self.lbl_cycle.config(text=f"Cycles: {self.cpu.cycle_count} | Flags: N={int(self.cpu.alu.n_flag)} Z={int(self.cpu.alu.z_flag)}")
-        self.animate_buses()
+        
+        if not self.is_running:
+            self.animate_buses()
 
     def edit_memory_value(self, event):
         sel = self.mem_list.curselection()
@@ -627,39 +611,30 @@ Inicio:
             messagebox.showinfo("Fim", "CPU Halt.")
             return
 
-        # Ciclo de 4 passos: 0 -> 1 -> 2 -> 3 -> 4 -> 0 (loop)
-        # O estado 0 é "Pronto para iniciar a próxima instrução"
-        
         if self.visual_micro_step == 0:
-            # Vai para 1: Busca de Endereço
             self.visual_micro_step = 1
-            self.cpu.step_1_fetch_addr() # Executa lógica do Passo 1
+            self.cpu.step_1_fetch_addr() 
             self.update_ui()
             
         elif self.visual_micro_step == 1:
-            # Vai para 2: Busca Memória/Decode
             self.visual_micro_step = 2
-            self.cpu.step_2_fetch_mem_decode() # Executa lógica do Passo 2
+            self.cpu.step_2_fetch_mem_decode() 
             self.update_ui()
             
         elif self.visual_micro_step == 2:
-            # Vai para 3: Execução (Visual Inputs)
             self.visual_micro_step = 3
-            # Apenas visualização aqui, lógica executada no próximo passo
             self.update_ui()
             
         elif self.visual_micro_step == 3:
-            # Vai para 4: Escrita (Executa lógica final e mostra output)
             self.visual_micro_step = 4
             try:
-                self.cpu.execute_micro_instruction() # Executa lógica final
+                self.cpu.execute_micro_instruction() 
                 self.update_ui()
             except Exception as e:
                 self.is_running = False
                 messagebox.showerror("Runtime Error", str(e))
                 
         elif self.visual_micro_step == 4:
-            # Reseta ciclo para 0 (Idle) -> Pronto para próxima instrução
             self.visual_micro_step = 0
             self.lbl_micro.config(text="Phase: IDLE (Next Instr)")
             self.reset_lines()
@@ -671,17 +646,27 @@ Inicio:
 
     def run_loop(self):
         if self.is_running and not self.cpu.halted:
-            self.cpu.execute_full_cycle() # Executa tudo de uma vez
+            self.cpu.execute_full_cycle() 
             self.visual_micro_step = 0 
-            self.update_ui()
+            self.update_ui_values_only() 
+            
+            self.update_memory_row(self.cpu.pc.value, True, False, False)
+            if self.prev_pc != self.cpu.pc.value:
+                 self.update_memory_row(self.prev_pc, False, False, False)
+                 self.prev_pc = self.cpu.pc.value
+            
             self.root.after(self.run_speed_ms, self.run_loop)
         else: self.is_running = False
 
-    def stop_run(self): self.is_running = False
+    def stop_run(self): 
+        self.is_running = False
+        self.visual_micro_step = 0
+        self.reset_lines()
+        self.lbl_micro.config(text="Phase: IDLE")
+        self.update_ui(full_refresh=True)
     
     def reset_cpu(self):
         self.stop_run()
-        # Correção: Cancelamento explícito para evitar Race Condition
         if self.anim_job:
             self.root.after_cancel(self.anim_job)
             self.anim_job = None

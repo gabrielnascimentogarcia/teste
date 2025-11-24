@@ -52,7 +52,7 @@ def assemble(source_code):
                 addr = int(addr_str, 16) if addr_str.upper().startswith("0X") else int(addr_str)
                 val = int(val_str, 16) if val_str.upper().startswith("0X") else int(val_str)
                 
-                # CORREÇÃO CRÍTICA: Máscara de 16 bits para permitir valores negativos no código fonte
+                # CORREÇÃO: Máscara de 16 bits
                 data_segment[addr] = val & 0xFFFF
 
                 # Se houver algo antes do .DATA, deve ser um label (ex: VAR: .DATA ...)
@@ -120,6 +120,10 @@ def assemble(source_code):
             addr = item['addr']
             lineno = item['line']
 
+            # CORREÇÃO: Verificação de colisão com .DATA
+            if addr in machine_code_dict:
+                 raise ValueError(f"Colisão de memória! O endereço {addr} já está ocupado por .DATA na linha {lineno}")
+
             if instr not in OPCODES:
                 raise ValueError(f"Instrução desconhecida '{instr}' na linha {lineno}")
 
@@ -144,13 +148,17 @@ def assemble(source_code):
                     except ValueError:
                          raise ValueError(f"Operando inválido '{op}' na linha {lineno}")
             
+            # CORREÇÃO: Validação de Range para inteiros de 12 bits assinados
+            # Range válido: [-2048, 2047] se assinado, ou [0, 4095] se endereço
+            if operand_val < -2048:
+                 raise ValueError(f"Operando {operand_val} muito pequeno (min -2048) na linha {lineno}")
+            if operand_val > 4095:
+                 raise ValueError(f"Operando {operand_val} excede 12 bits na linha {lineno}")
+
             # Ajuste de sinal (12 bits)
             if operand_val < 0:
                 operand_val = (operand_val + 4096) & 0xFFF
             
-            if operand_val > 4095:
-                 raise ValueError(f"Operando {operand_val} excede 12 bits na linha {lineno}")
-
             final_instr = base_opcode | (operand_val & 0x0FFF)
             machine_code_dict[addr] = final_instr
 

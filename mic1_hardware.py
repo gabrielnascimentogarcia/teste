@@ -3,7 +3,6 @@ import random
 class Opcode:
     """
     Define códigos de operação para a arquitetura MIC-1.
-    Mapeia mnemônicos para sua representação inteira de 4 bits.
     """
     LODD = 0x0
     STOD = 0x1
@@ -23,10 +22,6 @@ class Opcode:
     EXT  = 0xF
 
 class Register:
-    """
-    Simula um registrador de hardware de 16 bits com comportamento cíclico (wrap-around).
-    Garante que os valores permaneçam dentro de [0, 65535].
-    """
     def __init__(self, name, value=0):
         self.name = name
         self._value = value 
@@ -43,10 +38,6 @@ class Register:
         return f"[{self.name}: {self.value:04X}]"
 
 class Cache:
-    """
-    Implementa um sistema de linha de cache mapeada diretamente.
-    Usado tanto para Instrução (I-Cache) quanto para Dados (D-Cache).
-    """
     def __init__(self, size=16, name="L1"):
         self.lines = [{'valid': False, 'tag': 0, 'data': 0} for _ in range(size)]
         self.size = size
@@ -74,9 +65,6 @@ class Cache:
             return val
 
     def write_through(self, real_addr, value):
-        """
-        Atualiza a cache se o bloco estiver presente (Write-Through).
-        """
         index = real_addr % self.size
         tag = real_addr // self.size
         line = self.lines[index]
@@ -93,9 +81,6 @@ class Cache:
         self.last_status = "FLUSHED"
 
 class MemorySystem:
-    """
-    Gerencia a memória principal de 4096 palavras e caches L1 associadas.
-    """
     def __init__(self, size=4096, cache_size=8):
         self.size = size
         self.ram = [0] * size
@@ -121,9 +106,6 @@ class MemorySystem:
         value &= 0xFFFF 
         self.last_accessed_addr = real_addr
         self.ram[real_addr] = value
-        
-        # Coerência de Cache (Harvard Architecture Fix)
-        # Nota: Em hardware real, isso exigiria flush explícito ou snooping.
         self.d_cache.write_through(real_addr, value)
         self.i_cache.write_through(real_addr, value)
 
@@ -146,18 +128,15 @@ class MemorySystem:
 class ALU:
     """
     Unidade Lógica e Aritmética.
-    """
+        """
     def __init__(self):
         self.n_flag = False 
         self.z_flag = False
         self.last_result = 0
 
     def compute(self, a, b, op, update_flags=True):
-        """
-        Realiza a computação. 
-        update_flags: Se False, não altera N/Z (usado para movimentação de dados).
-        """
         res = 0
+        # Conversão para inteiros com sinal de 16 bits
         a_signed = a if a < 0x8000 else a - 0x10000
         b_signed = b if b < 0x8000 else b - 0x10000
         
@@ -173,18 +152,17 @@ class ALU:
         elif op == 'LSHIFT': res = a << 1
         elif op == 'RSHIFT': res = a >> 1 
         
+        # Máscara de 16 bits para o resultado final
         self.last_result = res & 0xFFFF
         
         if update_flags:
             self.z_flag = (self.last_result == 0)
+            # Verifica bit mais significativo (bit 15) para sinal negativo
             self.n_flag = (self.last_result & 0x8000) != 0
             
         return self.last_result
 
 class Mic1CPU:
-    """
-    Núcleo da CPU MIC-1.
-    """
     def __init__(self):
         self.mar = Register("MAR")
         self.mdr = Register("MDR")
@@ -205,7 +183,6 @@ class Mic1CPU:
         self.control_signals = "RESET"
         self.current_opcode = -1
         
-        # Dicionário que reflete o estado REAL dos barramentos
         self.bus_activity = {
             'bus_a': False, 'bus_b': False, 'bus_c': False, 
             'mem_read': False, 'mem_write': False
@@ -229,43 +206,26 @@ class Mic1CPU:
     def clear_bus_activity(self):
         for k in self.bus_activity: self.bus_activity[k] = False
 
-    # --- IMPLEMENTAÇÃO DOS SUBCICLOS ACADÊMICOS ---
-
     def step_1_fetch_addr(self):
-        """
-        Subciclo 1: Busca de Endereço (Fetch Address).
-        PC -> Barramento B -> Barramento C -> MAR
-        """
-        self.opc.value = self.pc.value # Guarda PC antigo para debug/display
+        self.opc.value = self.pc.value 
         self.mar.value = self.pc.value
-        
         self.clear_bus_activity()
         self.bus_activity['bus_b'] = True 
         self.bus_activity['bus_c'] = True
         self.control_signals = "FETCH: PC -> MAR"
 
     def step_2_fetch_mem_decode(self):
-        """
-        Subciclo 2: Leitura de Memória e Decodificação.
-        Mem[MAR] -> MDR -> MBR; PC = PC + 1; Decodifica Opcode.
-        """
         val = self.memory.read_instruction(self.mar.value)
         self.pc.value += 1
         self.mdr.value = val
         self.mbr.value = self.mdr.value 
-        
         self.current_opcode = self.mbr.value >> 12
-        
         self.clear_bus_activity()
         self.bus_activity['mem_read'] = True
-        self.bus_activity['bus_c'] = True # MDR -> MBR (Internal transfer via bus logic)
+        self.bus_activity['bus_c'] = True 
         self.control_signals = "DECODE: Mem -> MDR -> MBR"
 
     def execute_micro_instruction(self):
-        """
-        Subciclos 3 e 4: Execução e Escrita.
-        Realiza a operação lógica da ALU e escreve o resultado.
-        """
         if self.halted: return
         
         opcode = self.current_opcode
@@ -274,11 +234,9 @@ class Mic1CPU:
         self.control_signals = f"Op: {op_bin}"
         self.clear_bus_activity()
 
-        # Mapeamento de Operações
         if opcode == Opcode.LODD:
             val = self.memory.read_data(addr_field)
-            # update_flags=False: Carregar dados não deve mudar Z/N
-            self.h.value = self.alu.compute(val, 0, 'A', update_flags=False) 
+            self.h.value = self.alu.compute(val, 0, 'A', update_flags=True) 
             self.control_signals = f"LODD: AC <- Mem[{addr_field:03X}]"
             self.bus_activity['mem_read'] = True; self.bus_activity['bus_c'] = True
 
@@ -323,15 +281,14 @@ class Mic1CPU:
         elif opcode == Opcode.LOCO:
             const_val = addr_field
             if const_val & 0x800: const_val -= 0x1000 
-            # LOCO apenas carrega uma constante, não deve afetar flags (padrão MIC-1)
-            self.h.value = self.alu.compute(const_val, 0, 'A', update_flags=False) 
+            self.h.value = self.alu.compute(const_val, 0, 'A', update_flags=True) 
             self.control_signals = f"LOCO: AC <- {const_val}"
             self.bus_activity['bus_c'] = True
 
         elif opcode == Opcode.LODL:
             eff_addr = (self.sp.value + addr_field) & 0xFFF 
             val = self.memory.read_data(eff_addr)
-            self.h.value = self.alu.compute(val, 0, 'A', update_flags=False)
+            self.h.value = self.alu.compute(val, 0, 'A', update_flags=True)
             self.control_signals = f"LODL"
             self.bus_activity['mem_read'] = True; self.bus_activity['bus_b'] = True; self.bus_activity['bus_c'] = True
 
@@ -403,7 +360,7 @@ class Mic1CPU:
             elif func == 4: # POP
                 val = self.memory.read_data(self.sp.value)
                 self.sp.value += 1
-                self.h.value = self.alu.compute(val, 0, 'A', update_flags=False) 
+                self.h.value = self.alu.compute(val, 0, 'A', update_flags=True) 
                 self.control_signals = "POP"
                 self.bus_activity['mem_read'] = True; self.bus_activity['bus_c'] = True
             elif func == 5: # RETN
@@ -430,9 +387,6 @@ class Mic1CPU:
         self.cycle_count += 1
 
     def execute_full_cycle(self):
-        """
-        Executa todos os subciclos em sequência (para o modo Run).
-        """
         if self.halted: return
         self.step_1_fetch_addr()
         self.step_2_fetch_mem_decode()
