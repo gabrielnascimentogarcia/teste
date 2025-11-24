@@ -69,6 +69,7 @@ class Cache:
         tag = real_addr // self.size
         line = self.lines[index]
 
+        # Só atualiza se já estiver na cache (Write No-Allocate policy simples)
         if line['valid'] and line['tag'] == tag:
             line['data'] = value & 0xFFFF 
             self.last_status = "WRITE HIT"
@@ -106,8 +107,11 @@ class MemorySystem:
         value &= 0xFFFF 
         self.last_accessed_addr = real_addr
         self.ram[real_addr] = value
+        
+        # Correção: Write-through apenas na D-Cache. 
+        # A I-Cache não deve ser atualizada magicamente em escritas de dados
+        # para simular comportamento real (Harvard split ou incoerência temporária).
         self.d_cache.write_through(real_addr, value)
-        self.i_cache.write_through(real_addr, value)
 
     def load_program(self, machine_code):
         self.ram = [0] * self.size
@@ -128,7 +132,7 @@ class MemorySystem:
 class ALU:
     """
     Unidade Lógica e Aritmética.
-        """
+    """
     def __init__(self):
         self.n_flag = False 
         self.z_flag = False
@@ -136,7 +140,7 @@ class ALU:
 
     def compute(self, a, b, op, update_flags=True):
         res = 0
-        # Conversão para inteiros com sinal de 16 bits
+        # Conversão para inteiros com sinal de 16 bits para aritmética
         a_signed = a if a < 0x8000 else a - 0x10000
         b_signed = b if b < 0x8000 else b - 0x10000
         
@@ -149,6 +153,8 @@ class ALU:
         elif op == 'INC_A': res = a_signed + 1
         elif op == 'DEC_A': res = a_signed - 1
         elif op == 'INV_A': res = ~a
+        # Shifts no MIC-1 geralmente são lógicos para o Shifter padrão
+        # Usamos 'a' (unsigned) para garantir shift lógico (entrada de 0 no MSB)
         elif op == 'LSHIFT': res = a << 1
         elif op == 'RSHIFT': res = a >> 1 
         
@@ -280,6 +286,7 @@ class Mic1CPU:
 
         elif opcode == Opcode.LOCO:
             const_val = addr_field
+            # Verifica bit 11 para sinal (12 bits signed)
             if const_val & 0x800: const_val -= 0x1000 
             self.h.value = self.alu.compute(const_val, 0, 'A', update_flags=True) 
             self.control_signals = f"LOCO: AC <- {const_val}"

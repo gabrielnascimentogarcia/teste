@@ -7,7 +7,7 @@ def main():
     Ponto de entrada para o Simulador MIC-1.
     Inicializa a raiz do Tkinter e a aplicação GUI principal.
     """
-    print("Iniciando Simulador MIC-1 v4.0...")
+    print("Iniciando Simulador MIC-1 v6.1 (Patched)...")
     try:
         root = tk.Tk()
         app = Mic1GUI(root)

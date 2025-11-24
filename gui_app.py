@@ -106,7 +106,7 @@ class Mic1GUI:
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 / MAC-1 v6.0 (Final)")
+        self.root.title("Simulador MIC-1 / MAC-1 v6.1 (Corrigido)")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -114,6 +114,7 @@ class Mic1GUI:
         self.display_hex = True 
         self.run_speed_ms = 500
         self.anim_job = None
+        self.reset_lines_job = None # Controle de concorrência visual
         self.visual_micro_step = 0 
         
         self.follow_pc = tk.BooleanVar(value=True)
@@ -397,9 +398,14 @@ Fim:
         if hasattr(self, 'cpu'): self.update_ui_values_only()
 
     def animate_buses(self):
+        # Cancelar reset anterior se houver (evita race condition visual)
+        if self.reset_lines_job:
+            self.root.after_cancel(self.reset_lines_job)
+            self.reset_lines_job = None
+            self.reset_lines()
+
         if self.anim_job:
             self.root.after_cancel(self.anim_job)
-            self.reset_lines()
 
         active_color = "#FF4444"
         tags_to_light = []
@@ -460,7 +466,11 @@ Fim:
                 self.canvas.itemconfig(tag, fill=active_color)
             
         delay = min(300, max(100, self.run_speed_ms // 2))
-        self.anim_job = self.root.after(delay, self.reset_lines)
+        self.anim_job = self.root.after(delay, self.reset_lines_callback)
+
+    def reset_lines_callback(self):
+        self.reset_lines()
+        self.reset_lines_job = None
 
     def reset_lines(self):
         for t in ["main_bus_b", "main_bus_c", "bus_c", "bus_a", "h_to_alu_a", "bus_b_to_alu", "alu_to_shifter"]: 
@@ -603,27 +613,32 @@ Fim:
         count = len(mc) if isinstance(mc, dict) else len(mc)
         messagebox.showinfo("Montagem", f"Sucesso! {count} palavras/instruções carregadas.")
 
-    def step_button_action(self):
-        if self.is_running: return
-
+    def perform_micro_step(self):
+        """
+        Executa um micro-passo lógico da CPU e atualiza a UI.
+        Retorna True se o ciclo foi concluído (voltou para 0), False caso contrário.
+        """
         if self.cpu.halted:
             self.is_running = False
             messagebox.showinfo("Fim", "CPU Halt.")
-            return
+            return True
 
         if self.visual_micro_step == 0:
             self.visual_micro_step = 1
             self.cpu.step_1_fetch_addr() 
             self.update_ui()
+            return False
             
         elif self.visual_micro_step == 1:
             self.visual_micro_step = 2
             self.cpu.step_2_fetch_mem_decode() 
             self.update_ui()
+            return False
             
         elif self.visual_micro_step == 2:
             self.visual_micro_step = 3
             self.update_ui()
+            return False
             
         elif self.visual_micro_step == 3:
             self.visual_micro_step = 4
@@ -633,11 +648,18 @@ Fim:
             except Exception as e:
                 self.is_running = False
                 messagebox.showerror("Runtime Error", str(e))
+                return True # Erro força fim
+            return False
                 
         elif self.visual_micro_step == 4:
             self.visual_micro_step = 0
             self.lbl_micro.config(text="Phase: IDLE (Next Instr)")
             self.reset_lines()
+            return True # Ciclo completo
+
+    def step_button_action(self):
+        if self.is_running: return # Bloqueia se já estiver rodando automaticamente
+        self.perform_micro_step()
 
     def start_run(self):
         if not self.is_running:
@@ -645,18 +667,31 @@ Fim:
             self.run_loop()
 
     def run_loop(self):
-        if self.is_running and not self.cpu.halted:
-            self.cpu.execute_full_cycle() 
-            self.visual_micro_step = 0 
-            self.update_ui_values_only() 
-            
-            self.update_memory_row(self.cpu.pc.value, True, False, False)
-            if self.prev_pc != self.cpu.pc.value:
-                 self.update_memory_row(self.prev_pc, False, False, False)
-                 self.prev_pc = self.cpu.pc.value
-            
-            self.root.after(self.run_speed_ms, self.run_loop)
-        else: self.is_running = False
+        if not self.is_running or self.cpu.halted:
+            self.is_running = False
+            return
+
+        # Correção Crítica: Se estivermos no meio de um micro-passo, 
+        # terminamos ele antes de iniciar ciclos completos.
+        if self.visual_micro_step != 0:
+            cycle_completed = self.perform_micro_step()
+            # Se ainda não completou o ciclo, agendamos o próximo micro-step mais rápido
+            # para dar fluidez até voltar ao estado zero.
+            delay = max(50, self.run_speed_ms // 4)
+            self.root.after(delay, self.run_loop)
+            return
+
+        # Se chegamos aqui, visual_micro_step é 0. Execução normal.
+        self.cpu.execute_full_cycle() 
+        self.visual_micro_step = 0 
+        self.update_ui_values_only() 
+        
+        self.update_memory_row(self.cpu.pc.value, True, False, False)
+        if self.prev_pc != self.cpu.pc.value:
+                self.update_memory_row(self.prev_pc, False, False, False)
+                self.prev_pc = self.cpu.pc.value
+        
+        self.root.after(self.run_speed_ms, self.run_loop)
 
     def stop_run(self): 
         self.is_running = False
@@ -667,6 +702,11 @@ Fim:
     
     def reset_cpu(self):
         self.stop_run()
+        
+        if self.reset_lines_job:
+            self.root.after_cancel(self.reset_lines_job)
+            self.reset_lines_job = None
+            
         if self.anim_job:
             self.root.after_cancel(self.anim_job)
             self.anim_job = None

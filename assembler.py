@@ -49,10 +49,16 @@ def assemble(source_code):
                 val_str = parts[data_idx+2]
                 
                 # Converte endereço e valor
-                addr = int(addr_str, 16) if addr_str.upper().startswith("0X") else int(addr_str)
-                val = int(val_str, 16) if val_str.upper().startswith("0X") else int(val_str)
+                try:
+                    addr = int(addr_str, 16) if addr_str.upper().startswith("0X") else int(addr_str)
+                    val = int(val_str, 16) if val_str.upper().startswith("0X") else int(val_str)
+                except ValueError:
+                    return {}, f"Erro na linha {i+1}: Endereço ou valor inválido em .DATA"
+
+                if not (0 <= addr < 4096):
+                    return {}, f"Erro na linha {i+1}: Endereço .DATA {addr} fora dos limites (0-4095)."
                 
-                # CORREÇÃO: Máscara de 16 bits
+                # Máscara de 16 bits
                 data_segment[addr] = val & 0xFFFF
 
                 # Se houver algo antes do .DATA, deve ser um label (ex: VAR: .DATA ...)
@@ -65,8 +71,6 @@ def assemble(source_code):
                 # Linhas .DATA não vão para cleaned_lines (não são instruções executáveis)
                 continue
 
-            except ValueError:
-                return {}, f"Erro na linha {i+1}: Valor inválido em .DATA"
             except Exception as e:
                 return {}, f"Erro genérico na linha {i+1}: {e}"
                 
@@ -120,9 +124,9 @@ def assemble(source_code):
             addr = item['addr']
             lineno = item['line']
 
-            # CORREÇÃO: Verificação de colisão com .DATA
+            # Verificação de colisão com .DATA
             if addr in machine_code_dict:
-                 raise ValueError(f"Colisão de memória! O endereço {addr} já está ocupado por .DATA na linha {lineno}")
+                 raise ValueError(f"Conflito de Memória na linha {lineno}: O endereço {addr} já foi reservado por uma diretiva .DATA.")
 
             if instr not in OPCODES:
                 raise ValueError(f"Instrução desconhecida '{instr}' na linha {lineno}")
@@ -148,14 +152,14 @@ def assemble(source_code):
                     except ValueError:
                          raise ValueError(f"Operando inválido '{op}' na linha {lineno}")
             
-            # CORREÇÃO: Validação de Range para inteiros de 12 bits assinados
-            # Range válido: [-2048, 2047] se assinado, ou [0, 4095] se endereço
+            # Validação de Range para operandos de 12 bits
+            # [-2048, 2047] para imediatos assinados (LOCO) ou [0, 4095] para endereços
             if operand_val < -2048:
                  raise ValueError(f"Operando {operand_val} muito pequeno (min -2048) na linha {lineno}")
             if operand_val > 4095:
-                 raise ValueError(f"Operando {operand_val} excede 12 bits na linha {lineno}")
+                 raise ValueError(f"Operando {operand_val} excede 12 bits (max 4095) na linha {lineno}")
 
-            # Ajuste de sinal (12 bits)
+            # Ajuste de sinal (12 bits) para montar o opcode
             if operand_val < 0:
                 operand_val = (operand_val + 4096) & 0xFFF
             
