@@ -14,11 +14,18 @@ class CodeEditor(tk.Frame):
                                     background='#f0f0f0', state='disabled', font=("Consolas", 10))
         self.line_numbers.pack(side=tk.LEFT, fill=tk.Y)
         
-        self.text_area = tk.Text(self, font=("Consolas", 10), undo=True)
+        # Correção: wrap="none" para evitar quebra de linha visual que dessincroniza os números
+        self.text_area = tk.Text(self, font=("Consolas", 10), undo=True, wrap="none")
         self.text_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.sync_scroll)
         self.vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Adição de Scrollbar Horizontal
+        self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text_area.xview)
+        self.hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.text_area['xscrollcommand'] = self.hsb.set
+
         self.text_area['yscrollcommand'] = self.on_text_scroll
 
         self.text_area.tag_configure("keyword", foreground="blue", font=("Consolas", 10, "bold"))
@@ -102,7 +109,7 @@ class Mic1GUI:
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 / MAC-1 v5.7 (Academic Subcycles)")
+        self.root.title("Simulador MIC-1 / MAC-1 v5.8 (Corrigido)")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -159,9 +166,11 @@ Inicio:
         
         self.canvas = tk.Canvas(canvas_frame, bg="white", bd=2, relief="sunken")
         vbar = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=vbar.set)
+        hbar = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
+        self.canvas.configure(yscrollcommand=vbar.set, xscrollcommand=hbar.set)
         
         vbar.pack(side=tk.RIGHT, fill=tk.Y)
+        hbar.pack(side=tk.BOTTOM, fill=tk.X)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
         self.canvas.bind("<Configure>", self.on_canvas_resize)
         
@@ -406,6 +415,9 @@ Inicio:
         
         opcode = self.cpu.current_opcode
         step = self.visual_micro_step
+        
+        # Atualização: Consulta o estado real do hardware sempre que possível
+        bus_activity = self.cpu.bus_activity
 
         if step == 1: 
             # Subciclo 1: Busca de Endereço (PC -> MAR)
@@ -414,43 +426,49 @@ Inicio:
 
         elif step == 2:
             # Subciclo 2: Leitura de Memória (Mem -> MDR -> MBR)
-            tags_to_light = ["ram_addr", "ram_data", "c_to_MDR", "main_bus_c", "bus_c", "c_to_MBR"]
+            tags_to_light = []
+            if bus_activity['mem_read']: tags_to_light += ["ram_addr", "ram_data"]
+            tags_to_light += ["c_to_MDR", "main_bus_c", "bus_c", "c_to_MBR"]
             self.lbl_micro.config(text="2. DECODE (Mem -> MDR/MBR)")
 
         elif step == 3:
             # Subciclo 3: Execução (Carrega dados para ALU)
             self.lbl_micro.config(text="3. EXECUTE (ALU Input)")
             
-            # Lógica Didática: Mostrar de onde vêm os dados
+            # Checa atividades de barramento reais
+            if bus_activity['bus_b']: tags_to_light.append("main_bus_b")
+            if bus_activity['bus_b']: tags_to_light.append("bus_b_to_alu")
+            if bus_activity['bus_a']: tags_to_light.append("h_to_alu_a") # H é sempre A na ALU
+
+            # Adições didáticas baseadas no Opcode para origem exata dos dados (hardware abstrai mux)
             if opcode in [Opcode.ADDD, Opcode.SUBD, Opcode.LODD, Opcode.ADDL, Opcode.SUBL]:
-                # Operações que usam memória (simulado via MDR) + AC (H)
-                tags_to_light = ["main_bus_b", "MDR_to_b", "bus_b_to_alu", "h_to_alu_a"]
-                # Para mostrar que o dado veio da RAM para MDR (Didático)
-                tags_to_light += ["ram_data"] 
+                 tags_to_light += ["MDR_to_b", "h_to_alu_a"]
+                 if bus_activity['mem_read']: tags_to_light.append("ram_data") # Visual apenas
             elif opcode == Opcode.STOD:
-                # AC (H) -> ...
-                tags_to_light = ["h_to_alu_a"]
+                 tags_to_light += ["h_to_alu_a"]
             elif opcode in [Opcode.LOCO, Opcode.JUMP, Opcode.JPOS, Opcode.JZER, Opcode.JNEG, Opcode.JNZE]:
-                # Constante/Endereço do MBR -> ALU (Pass through B)
-                tags_to_light = ["main_bus_b", "MBR_to_b", "bus_b_to_alu"]
+                 tags_to_light += ["MBR_to_b"]
             elif opcode == Opcode.CALL:
-                tags_to_light = ["main_bus_b", "SP_to_b", "bus_b_to_alu", "h_to_alu_a"]
+                 tags_to_light += ["SP_to_b", "h_to_alu_a"]
 
         elif step == 4:
             # Subciclo 4: Escrita (ALU Output -> Reg/Mem)
             self.lbl_micro.config(text="4. WRITE BACK (Result -> Dest)")
             
             base_tags = ["alu_to_shifter", "main_bus_c", "bus_c"]
+            tags_to_light = base_tags[:]
+            
+            # Usa hardware para validar se houve escrita em memória
+            if bus_activity['mem_write']: tags_to_light += ["ram_addr", "ram_data"]
             
             if opcode in [Opcode.LODD, Opcode.ADDD, Opcode.SUBD, Opcode.LOCO, Opcode.LODL, Opcode.ADDL, Opcode.SUBL]:
-                 tags_to_light = base_tags + ["c_to_H"]
+                 tags_to_light += ["c_to_H"]
             elif opcode == Opcode.STOD:
-                 # H passou pela ALU, vai para MDR para escrita (Didático)
-                 tags_to_light = base_tags + ["c_to_MDR", "ram_data", "ram_addr"]
+                 tags_to_light += ["c_to_MDR"]
             elif opcode in [Opcode.JUMP, Opcode.JPOS, Opcode.JZER, Opcode.JNEG, Opcode.JNZE]:
-                 tags_to_light = base_tags + ["c_to_PC"]
+                 if bus_activity['bus_c']: tags_to_light += ["c_to_PC"]
             elif opcode == Opcode.CALL:
-                 tags_to_light = base_tags + ["c_to_SP", "ram_data", "ram_addr"]
+                 tags_to_light += ["c_to_SP"]
 
         for tag in tags_to_light: 
             if "ram" in tag:
@@ -663,10 +681,12 @@ Inicio:
     
     def reset_cpu(self):
         self.stop_run()
+        # Correção: Cancelamento explícito para evitar Race Condition
         if self.anim_job:
             self.root.after_cancel(self.anim_job)
             self.anim_job = None
-            self.reset_lines()
+            
+        self.reset_lines()
             
         self.prev_pc = -1
         self.prev_sp = -1

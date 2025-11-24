@@ -123,6 +123,7 @@ class MemorySystem:
         self.ram[real_addr] = value
         
         # Coerência de Cache (Harvard Architecture Fix)
+        # Nota: Em hardware real, isso exigiria flush explícito ou snooping.
         self.d_cache.write_through(real_addr, value)
         self.i_cache.write_through(real_addr, value)
 
@@ -151,7 +152,11 @@ class ALU:
         self.z_flag = False
         self.last_result = 0
 
-    def compute(self, a, b, op):
+    def compute(self, a, b, op, update_flags=True):
+        """
+        Realiza a computação. 
+        update_flags: Se False, não altera N/Z (usado para movimentação de dados).
+        """
         res = 0
         a_signed = a if a < 0x8000 else a - 0x10000
         b_signed = b if b < 0x8000 else b - 0x10000
@@ -169,8 +174,11 @@ class ALU:
         elif op == 'RSHIFT': res = a >> 1 
         
         self.last_result = res & 0xFFFF
-        self.z_flag = (self.last_result == 0)
-        self.n_flag = (self.last_result & 0x8000) != 0
+        
+        if update_flags:
+            self.z_flag = (self.last_result == 0)
+            self.n_flag = (self.last_result & 0x8000) != 0
+            
         return self.last_result
 
 class Mic1CPU:
@@ -197,6 +205,7 @@ class Mic1CPU:
         self.control_signals = "RESET"
         self.current_opcode = -1
         
+        # Dicionário que reflete o estado REAL dos barramentos
         self.bus_activity = {
             'bus_a': False, 'bus_b': False, 'bus_c': False, 
             'mem_read': False, 'mem_write': False
@@ -268,7 +277,8 @@ class Mic1CPU:
         # Mapeamento de Operações
         if opcode == Opcode.LODD:
             val = self.memory.read_data(addr_field)
-            self.h.value = self.alu.compute(val, 0, 'A') 
+            # update_flags=False: Carregar dados não deve mudar Z/N
+            self.h.value = self.alu.compute(val, 0, 'A', update_flags=False) 
             self.control_signals = f"LODD: AC <- Mem[{addr_field:03X}]"
             self.bus_activity['mem_read'] = True; self.bus_activity['bus_c'] = True
 
@@ -279,14 +289,14 @@ class Mic1CPU:
 
         elif opcode == Opcode.ADDD:
             mem_val = self.memory.read_data(addr_field)
-            res = self.alu.compute(self.h.value, mem_val, 'ADD')
+            res = self.alu.compute(self.h.value, mem_val, 'ADD', update_flags=True)
             self.h.value = res
             self.control_signals = f"ADDD"
             self.bus_activity['bus_a'] = True; self.bus_activity['bus_b'] = True; self.bus_activity['bus_c'] = True
 
         elif opcode == Opcode.SUBD:
             mem_val = self.memory.read_data(addr_field)
-            res = self.alu.compute(self.h.value, mem_val, 'SUB')
+            res = self.alu.compute(self.h.value, mem_val, 'SUB', update_flags=True)
             self.h.value = res
             self.control_signals = f"SUBD"
             self.bus_activity['bus_a'] = True; self.bus_activity['bus_b'] = True; self.bus_activity['bus_c'] = True
@@ -313,14 +323,15 @@ class Mic1CPU:
         elif opcode == Opcode.LOCO:
             const_val = addr_field
             if const_val & 0x800: const_val -= 0x1000 
-            self.h.value = self.alu.compute(const_val, 0, 'A') 
+            # LOCO apenas carrega uma constante, não deve afetar flags (padrão MIC-1)
+            self.h.value = self.alu.compute(const_val, 0, 'A', update_flags=False) 
             self.control_signals = f"LOCO: AC <- {const_val}"
             self.bus_activity['bus_c'] = True
 
         elif opcode == Opcode.LODL:
             eff_addr = (self.sp.value + addr_field) & 0xFFF 
             val = self.memory.read_data(eff_addr)
-            self.h.value = self.alu.compute(val, 0, 'A')
+            self.h.value = self.alu.compute(val, 0, 'A', update_flags=False)
             self.control_signals = f"LODL"
             self.bus_activity['mem_read'] = True; self.bus_activity['bus_b'] = True; self.bus_activity['bus_c'] = True
 
@@ -333,14 +344,14 @@ class Mic1CPU:
         elif opcode == Opcode.ADDL:
             eff_addr = (self.sp.value + addr_field) & 0xFFF
             mem_val = self.memory.read_data(eff_addr)
-            self.h.value = self.alu.compute(self.h.value, mem_val, 'ADD')
+            self.h.value = self.alu.compute(self.h.value, mem_val, 'ADD', update_flags=True)
             self.control_signals = "ADDL"
             self.bus_activity['mem_read'] = True; self.bus_activity['bus_a'] = True; self.bus_activity['bus_c'] = True
 
         elif opcode == Opcode.SUBL:
             eff_addr = (self.sp.value + addr_field) & 0xFFF
             mem_val = self.memory.read_data(eff_addr)
-            self.h.value = self.alu.compute(self.h.value, mem_val, 'SUB')
+            self.h.value = self.alu.compute(self.h.value, mem_val, 'SUB', update_flags=True)
             self.control_signals = "SUBL"
             self.bus_activity['mem_read'] = True; self.bus_activity['bus_a'] = True; self.bus_activity['bus_c'] = True
             
@@ -392,7 +403,7 @@ class Mic1CPU:
             elif func == 4: # POP
                 val = self.memory.read_data(self.sp.value)
                 self.sp.value += 1
-                self.h.value = self.alu.compute(val, 0, 'A') 
+                self.h.value = self.alu.compute(val, 0, 'A', update_flags=False) 
                 self.control_signals = "POP"
                 self.bus_activity['mem_read'] = True; self.bus_activity['bus_c'] = True
             elif func == 5: # RETN
