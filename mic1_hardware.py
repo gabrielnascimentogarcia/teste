@@ -82,7 +82,7 @@ class Cache:
         line = self.lines[index]
 
         if line['valid'] and line['tag'] == tag:
-            line['data'] = value & 0xFFFF # Garante integridade na cache
+            line['data'] = value & 0xFFFF 
             self.last_status = "WRITE HIT"
         else:
             self.last_status = "WRITE MISS"
@@ -118,7 +118,7 @@ class MemorySystem:
 
     def write(self, address, value):
         real_addr = self._mask_addr(address)
-        value &= 0xFFFF # CORREÇÃO CRÍTICA: Garante 16-bits unsigned na memória
+        value &= 0xFFFF 
         self.last_accessed_addr = real_addr
         self.ram[real_addr] = value
         
@@ -131,11 +131,11 @@ class MemorySystem:
         if isinstance(machine_code, dict):
             for addr, val in machine_code.items():
                 if 0 <= addr < self.size:
-                    self.ram[addr] = val & 0xFFFF # CORREÇÃO CRÍTICA
+                    self.ram[addr] = val & 0xFFFF 
         else:
             for i, code in enumerate(machine_code):
                 if i < len(self.ram):
-                    self.ram[i] = code & 0xFFFF # CORREÇÃO CRÍTICA
+                    self.ram[i] = code & 0xFFFF
         self.flush_caches()
 
     def flush_caches(self):
@@ -153,7 +153,6 @@ class ALU:
 
     def compute(self, a, b, op):
         res = 0
-        # Converte para sinalizado de 16 bits para cálculos aritméticos
         a_signed = a if a < 0x8000 else a - 0x10000
         b_signed = b if b < 0x8000 else b - 0x10000
         
@@ -167,7 +166,7 @@ class ALU:
         elif op == 'DEC_A': res = a_signed - 1
         elif op == 'INV_A': res = ~a
         elif op == 'LSHIFT': res = a << 1
-        elif op == 'RSHIFT': res = a >> 1 # Logical Shift Right
+        elif op == 'RSHIFT': res = a >> 1 
         
         self.last_result = res & 0xFFFF
         self.z_flag = (self.last_result == 0)
@@ -221,27 +220,50 @@ class Mic1CPU:
     def clear_bus_activity(self):
         for k in self.bus_activity: self.bus_activity[k] = False
 
-    def fetch_cycle(self):
-        self.opc.value = self.pc.value
+    # --- IMPLEMENTAÇÃO DOS SUBCICLOS ACADÊMICOS ---
+
+    def step_1_fetch_addr(self):
+        """
+        Subciclo 1: Busca de Endereço (Fetch Address).
+        PC -> Barramento B -> Barramento C -> MAR
+        """
+        self.opc.value = self.pc.value # Guarda PC antigo para debug/display
         self.mar.value = self.pc.value
+        
         self.clear_bus_activity()
         self.bus_activity['bus_b'] = True 
-        self.bus_activity['mem_read'] = True
-        
+        self.bus_activity['bus_c'] = True
+        self.control_signals = "FETCH: PC -> MAR"
+
+    def step_2_fetch_mem_decode(self):
+        """
+        Subciclo 2: Leitura de Memória e Decodificação.
+        Mem[MAR] -> MDR -> MBR; PC = PC + 1; Decodifica Opcode.
+        """
         val = self.memory.read_instruction(self.mar.value)
         self.pc.value += 1
         self.mdr.value = val
         self.mbr.value = self.mdr.value 
         
         self.current_opcode = self.mbr.value >> 12
-        return self.current_opcode
+        
+        self.clear_bus_activity()
+        self.bus_activity['mem_read'] = True
+        self.bus_activity['bus_c'] = True # MDR -> MBR (Internal transfer via bus logic)
+        self.control_signals = "DECODE: Mem -> MDR -> MBR"
 
-    def execute_instruction(self):
+    def execute_micro_instruction(self):
+        """
+        Subciclos 3 e 4: Execução e Escrita.
+        Realiza a operação lógica da ALU e escreve o resultado.
+        """
         if self.halted: return
-        opcode = self.fetch_cycle()
+        
+        opcode = self.current_opcode
         addr_field = self.mbr.value & 0x0FFF
         op_bin = f"{opcode:04b}"
         self.control_signals = f"Op: {op_bin}"
+        self.clear_bus_activity()
 
         # Mapeamento de Operações
         if opcode == Opcode.LODD:
@@ -395,3 +417,12 @@ class Mic1CPU:
                 self.control_signals = f"NOP / Unknown F{func:03X}"
         
         self.cycle_count += 1
+
+    def execute_full_cycle(self):
+        """
+        Executa todos os subciclos em sequência (para o modo Run).
+        """
+        if self.halted: return
+        self.step_1_fetch_addr()
+        self.step_2_fetch_mem_decode()
+        self.execute_micro_instruction()
