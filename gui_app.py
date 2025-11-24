@@ -106,7 +106,7 @@ class Mic1GUI:
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 / MAC-1 v6.1 (Corrigido)")
+        self.root.title("Simulador MIC-1 / MAC-1 v6.2 (Polido)")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -191,11 +191,12 @@ Fim:
         btn_f = ttk.Frame(ctrl_frame)
         btn_f.pack(fill=tk.X)
         ttk.Button(btn_f, text="Run", command=self.start_run).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_f, text="Step (Micro)", command=self.step_button_action).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_f, text="Step", command=self.step_button_action).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_f, text="Stop", command=self.stop_run).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_f, text="Reset", command=self.reset_cpu).pack(side=tk.LEFT, padx=2)
         
-        self.btn_mode = ttk.Button(ctrl_frame, text="Mode: HEX", command=self.toggle_display_mode)
+        # Polimento UX: Texto explícito sobre o estado atual
+        self.btn_mode = ttk.Button(ctrl_frame, text="Visualização: HEX", command=self.toggle_display_mode)
         self.btn_mode.pack(side=tk.RIGHT, padx=5, pady=2)
         
         spd_frame = ttk.Frame(ctrl_frame)
@@ -215,18 +216,25 @@ Fim:
         split_cache.pack(fill=tk.X)
         cols = ("valid", "tag", "data")
         
+        # Polimento UX: Colunas mais largas para melhor leitura
+        col_width = 45
+        
         icache_frame = ttk.Frame(split_cache)
         icache_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         ttk.Label(icache_frame, text="I-Cache", font=("Arial", 8, "bold")).pack()
         self.icache_tree = ttk.Treeview(icache_frame, columns=cols, show="headings", height=5)
-        for c in cols: self.icache_tree.heading(c, text=c[0].upper()); self.icache_tree.column(c, width=35, anchor="center")
+        for c in cols: 
+            self.icache_tree.heading(c, text=c[0].upper())
+            self.icache_tree.column(c, width=col_width, anchor="center")
         self.icache_tree.pack(fill=tk.X)
 
         dcache_frame = ttk.Frame(split_cache)
         dcache_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         ttk.Label(dcache_frame, text="D-Cache", font=("Arial", 8, "bold")).pack()
         self.dcache_tree = ttk.Treeview(dcache_frame, columns=cols, show="headings", height=5)
-        for c in cols: self.dcache_tree.heading(c, text=c[0].upper()); self.dcache_tree.column(c, width=35, anchor="center")
+        for c in cols: 
+            self.dcache_tree.heading(c, text=c[0].upper())
+            self.dcache_tree.column(c, width=col_width, anchor="center")
         self.dcache_tree.pack(fill=tk.X)
         
         self.lbl_cache_status = ttk.Label(cache_main_frame, text="Status: IDLE", foreground="blue")
@@ -288,7 +296,9 @@ Fim:
     def toggle_display_mode(self):
         scroll_pos = self.mem_list.yview()
         self.display_hex = not self.display_hex
-        self.btn_mode.config(text="Mode: HEX" if self.display_hex else "Mode: DEC")
+        # Polimento UX: Texto reflete o estado ATUAL
+        mode_text = "HEX" if self.display_hex else "DEC"
+        self.btn_mode.config(text=f"Visualização: {mode_text}")
         self.update_ui(full_refresh=True)
         self.mem_list.yview_moveto(scroll_pos[0])
 
@@ -415,18 +425,19 @@ Fim:
         
         bus_activity = self.cpu.bus_activity
 
+        # Polimento Acadêmico: Nomes de fases mais precisos
         if step == 1: 
             tags_to_light = ["main_bus_b", "PC_to_b", "main_bus_c", "bus_c", "c_to_MAR"]
-            self.lbl_micro.config(text="1. BUSCA (PC -> MAR)")
+            self.lbl_micro.config(text="1. BUSCA (Fetch: PC -> MAR)")
 
         elif step == 2:
             tags_to_light = []
             if bus_activity['mem_read']: tags_to_light += ["ram_addr", "ram_data"]
             tags_to_light += ["c_to_MDR", "main_bus_c", "bus_c", "c_to_MBR"]
-            self.lbl_micro.config(text="2. DECODE (Mem -> MDR/MBR)")
+            self.lbl_micro.config(text="2. DECODIFICAÇÃO (Decode)")
 
         elif step == 3:
-            self.lbl_micro.config(text="3. EXECUTE (ALU Input)")
+            self.lbl_micro.config(text="3. EXECUÇÃO (Execute)")
             
             if bus_activity['bus_b']: tags_to_light.append("main_bus_b")
             if bus_activity['bus_b']: tags_to_light.append("bus_b_to_alu")
@@ -443,7 +454,7 @@ Fim:
                  tags_to_light += ["SP_to_b", "h_to_alu_a"]
 
         elif step == 4:
-            self.lbl_micro.config(text="4. WRITE BACK (Result -> Dest)")
+            self.lbl_micro.config(text="4. GRAVAÇÃO (Write Back)")
             
             base_tags = ["alu_to_shifter", "main_bus_c", "bus_c"]
             tags_to_light = base_tags[:]
