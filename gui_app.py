@@ -445,6 +445,9 @@ Fim:
             if bus_activity['bus_b']: tags_to_light.append("bus_b_to_alu")
             if bus_activity['bus_a']: tags_to_light.append("h_to_alu_a") 
 
+            # Correção de Arquitetura: Visualizar o Shifter sempre que a ALU for usada
+            tags_to_light.append("alu_to_shifter")
+
             if opcode in [Opcode.ADDD, Opcode.SUBD, Opcode.LODD, Opcode.ADDL, Opcode.SUBL]:
                  tags_to_light += ["MDR_to_b", "h_to_alu_a"]
                  if bus_activity['mem_read']: tags_to_light.append("ram_data") 
@@ -458,6 +461,7 @@ Fim:
         elif step == 4:
             self.lbl_micro.config(text="4. GRAVAÇÃO (Write Back)")
             
+            # Shifter sempre envolvido no caminho para Bus C
             base_tags = ["alu_to_shifter", "main_bus_c", "bus_c"]
             tags_to_light = base_tags[:]
             
@@ -588,7 +592,6 @@ Fim:
         self.canvas.itemconfig(self.control_label_id, text=self.cpu.control_signals)
         self.lbl_cycle.config(text=f"Cycles: {self.cpu.cycle_count} | Flags: N={int(self.cpu.alu.n_flag)} Z={int(self.cpu.alu.z_flag)}")
         
-        # CORREÇÃO: A animação deve rodar mesmo se estiver em modo automático (is_running)
         self.animate_buses()
 
     def edit_memory_value(self, event):
@@ -661,17 +664,20 @@ Fim:
             except Exception as e:
                 self.is_running = False
                 messagebox.showerror("Runtime Error", str(e))
-                return True # Erro força fim
+                return True 
             return False
                 
         elif self.visual_micro_step == 4:
             self.visual_micro_step = 0
             self.lbl_micro.config(text="Phase: IDLE (Next Instr)")
             self.reset_lines()
-            return True # Ciclo completo
+            return True 
 
     def step_button_action(self):
-        if self.is_running: return # Bloqueia se já estiver rodando automaticamente
+        # Correção UX: Permitir avanço manual mesmo se estiver pausado, 
+        # mas bloqueia apenas se o loop automático estiver rodando para evitar conflito.
+        if self.is_running: 
+            return 
         self.perform_micro_step()
 
     def start_run(self):
@@ -684,25 +690,19 @@ Fim:
             self.is_running = False
             return
 
-        # CORREÇÃO: Usamos perform_micro_step repetidamente para garantir que
-        # a animação de cada fase (Fetch, Decode, Execute) seja renderizada.
-        # Anteriormente, execute_full_cycle() rodava tudo de uma vez, 
-        # impedindo a visualização do fluxo de dados.
-        
         cycle_completed = self.perform_micro_step()
         
-        # Opcional: Garante que o PC seja seguido mesmo durante o Run rápido
         if self.follow_pc.get() and not self.user_interacting:
              self.mem_list.see(self.cpu.pc.value)
         
-        # Agenda o próximo passo. O "speed" agora controla a velocidade dos micro-passos.
         self.root.after(self.run_speed_ms, self.run_loop)
 
     def stop_run(self): 
         self.is_running = False
-        self.visual_micro_step = 0
+        # Não resetamos o visual_micro_step para permitir 'Pause' e 'Resume'
+        # self.visual_micro_step = 0 
         self.reset_lines()
-        self.lbl_micro.config(text="Phase: IDLE")
+        self.lbl_micro.config(text="Phase: PAUSED")
         self.update_ui(full_refresh=True)
     
     def reset_cpu(self):
