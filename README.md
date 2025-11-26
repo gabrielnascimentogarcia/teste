@@ -77,6 +77,3 @@ O simulador implementa uma **Split L1 Cache** (separada para Instruções e Dado
 *   **Erro "ModuleNotFoundError: No module named 'tkinter'"**: Instale o Tkinter (veja a seção de Pré-requisitos).
 *   **O código não roda após edição**: Lembre-se de clicar em **"Montar (Assemble)"** sempre que mudar o texto no editor.
 *   **A tela travou**: Clique em "Stop" ou feche e abra novamente. Se houver um loop infinito no seu Assembly (`JUMP Inicio`), o "Run" ficará rodando para sempre até você parar.
-
----
-*Desenvolvido para fins educacionais.*
