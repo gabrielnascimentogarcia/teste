@@ -39,12 +39,9 @@ class Register:
 
 class Cache:
     def __init__(self, size=16, name="L1"):
-        self.lines = [{'valid': False, 'tag': 0, 'data': 0} for _ in range(size)]
         self.size = size
         self.name = name
-        self.last_status = "IDLE"
-        self.hit_count = 0
-        self.miss_count = 0
+        self.flush() # Inicializa zerada
 
     def read(self, real_addr, ram_memory):
         index = real_addr % self.size
@@ -77,12 +74,14 @@ class Cache:
             self.last_status = "WRITE MISS"
     
     def flush(self):
-        for line in self.lines:
-            line['valid'] = False
+        # Reset completo: invalida e ZERA os dados para visualização limpa na GUI
+        self.lines = [{'valid': False, 'tag': 0, 'data': 0} for _ in range(self.size)]
         self.last_status = "FLUSHED"
+        self.hit_count = 0
+        self.miss_count = 0
 
 class MemorySystem:
-    def __init__(self, size=4096, cache_size=8):
+    def __init__(self, size=4096, cache_size=16): # Cache size 16 por padrão
         self.size = size
         self.ram = [0] * size
         self.i_cache = Cache(cache_size, "I-Cache")
@@ -108,12 +107,10 @@ class MemorySystem:
         self.last_accessed_addr = real_addr
         self.ram[real_addr] = value
         
-        # Correção Crítica: Ao escrever na memória, devemos garantir consistência.
         # Atualiza D-Cache (Write-Through)
         self.d_cache.write_through(real_addr, value)
         
-        # Invalida I-Cache para suportar código automodificável ou carregamento de novos programas
-        # Isso previne que a CPU execute instruções "velhas" que já foram sobrescritas na RAM.
+        # Invalida I-Cache para garantir consistência (código automodificável)
         self.i_cache.flush()
 
     def load_program(self, machine_code):
@@ -133,23 +130,15 @@ class MemorySystem:
         self.d_cache.flush()
 
 class Shifter:
-    """
-    Unidade de Deslocamento (Shifter).
-    Arquiteturalmente separada da ALU no MIC-1.
-    """
     def compute(self, val, op):
         val &= 0xFFFF
         if op == 'LSHIFT':
             return (val << 1) & 0xFFFF
         elif op == 'RSHIFT':
             return (val >> 1) & 0xFFFF
-        return val # No Shift
+        return val
 
 class ALU:
-    """
-    Unidade Lógica e Aritmética.
-    Responsável apenas por operações Aritméticas e Lógicas (sem Shift).
-    """
     def __init__(self):
         self.n_flag = False 
         self.z_flag = False
@@ -157,11 +146,9 @@ class ALU:
 
     def compute(self, a, b, op, update_flags=True):
         res = 0
-        # Conversão para inteiros com sinal de 16 bits para aritmética
         a_signed = a if a < 0x8000 else a - 0x10000
         b_signed = b if b < 0x8000 else b - 0x10000
         
-        # Operações puras da ALU
         if op == 'ADD': res = a_signed + b_signed
         elif op == 'SUB': res = a_signed - b_signed
         elif op == 'AND': res = a & b
@@ -171,14 +158,12 @@ class ALU:
         elif op == 'INC_A': res = a_signed + 1
         elif op == 'DEC_A': res = a_signed - 1
         elif op == 'INV_A': res = ~a
-        else: res = a # Default pass-through
+        else: res = a 
         
-        # Máscara de 16 bits para o resultado final
         self.last_result = res & 0xFFFF
         
         if update_flags:
             self.z_flag = (self.last_result == 0)
-            # Verifica bit mais significativo (bit 15) para sinal negativo
             self.n_flag = (self.last_result & 0x8000) != 0
             
         return self.last_result
@@ -199,7 +184,7 @@ class Mic1CPU:
 
         self.memory = MemorySystem()
         self.alu = ALU()
-        self.shifter = Shifter() # Componente adicionado
+        self.shifter = Shifter()
         
         self.halted = False
         self.cycle_count = 0
@@ -218,7 +203,10 @@ class Mic1CPU:
         self.sp.value = 4095
         self.alu.n_flag = False
         self.alu.z_flag = False
+        
+        # Força a limpeza das caches no hardware
         self.memory.flush_caches()
+        
         self.memory.last_accessed_addr = -1
         self.halted = False
         self.cycle_count = 0
@@ -257,7 +245,6 @@ class Mic1CPU:
         self.control_signals = f"Op: {op_bin}"
         self.clear_bus_activity()
 
-        # Helper para processar ALU + Shifter
         def alu_op(val_a, val_b, op_alu, op_shift=None):
             res_alu = self.alu.compute(val_a, val_b, op_alu, update_flags=True)
             return self.shifter.compute(res_alu, op_shift)
@@ -306,7 +293,6 @@ class Mic1CPU:
 
         elif opcode == Opcode.LOCO:
             const_val = addr_field
-            # Verifica bit 11 para sinal (12 bits signed)
             if const_val & 0x800: const_val -= 0x1000 
             self.h.value = alu_op(const_val, 0, 'A')
             self.control_signals = f"LOCO: AC <- {const_val}"

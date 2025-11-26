@@ -106,7 +106,7 @@ class Mic1GUI:
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 / MAC-1 v6.3 (Corrigido)")
+        self.root.title("Simulador MIC-1 / MAC-1 v6.5 (Corrigido)")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -210,36 +210,51 @@ Fim:
         self.lbl_micro = ttk.Label(ctrl_frame, text="Phase: IDLE", foreground="red")
         self.lbl_micro.pack(side=tk.RIGHT, padx=5)
 
+        # --- Caches L1 (Corrigido com Scrollbar) ---
         cache_main_frame = ttk.LabelFrame(right_frame, text="Caches L1 (Split)")
         cache_main_frame.pack(fill=tk.X, padx=5, pady=5)
         split_cache = ttk.Frame(cache_main_frame)
         split_cache.pack(fill=tk.X)
         cols = ("valid", "tag", "data")
         
-        # Polimento UX: Colunas mais largas para melhor leitura
         col_width = 45
         
+        # I-Cache
         icache_frame = ttk.Frame(split_cache)
         icache_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         ttk.Label(icache_frame, text="I-Cache", font=("Arial", 8, "bold")).pack()
-        self.icache_tree = ttk.Treeview(icache_frame, columns=cols, show="headings", height=5)
+        
+        # Adicionado Scrollbar para I-Cache
+        self.icache_tree = ttk.Treeview(icache_frame, columns=cols, show="headings", height=8)
+        icache_scroll = ttk.Scrollbar(icache_frame, orient="vertical", command=self.icache_tree.yview)
+        self.icache_tree.configure(yscrollcommand=icache_scroll.set)
+        icache_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.icache_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
         for c in cols: 
             self.icache_tree.heading(c, text=c[0].upper())
             self.icache_tree.column(c, width=col_width, anchor="center")
-        self.icache_tree.pack(fill=tk.X)
 
+        # D-Cache
         dcache_frame = ttk.Frame(split_cache)
         dcache_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         ttk.Label(dcache_frame, text="D-Cache", font=("Arial", 8, "bold")).pack()
-        self.dcache_tree = ttk.Treeview(dcache_frame, columns=cols, show="headings", height=5)
+        
+        # Adicionado Scrollbar para D-Cache
+        self.dcache_tree = ttk.Treeview(dcache_frame, columns=cols, show="headings", height=8)
+        dcache_scroll = ttk.Scrollbar(dcache_frame, orient="vertical", command=self.dcache_tree.yview)
+        self.dcache_tree.configure(yscrollcommand=dcache_scroll.set)
+        dcache_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.dcache_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
         for c in cols: 
             self.dcache_tree.heading(c, text=c[0].upper())
             self.dcache_tree.column(c, width=col_width, anchor="center")
-        self.dcache_tree.pack(fill=tk.X)
         
         self.lbl_cache_status = ttk.Label(cache_main_frame, text="Status: IDLE", foreground="blue")
         self.lbl_cache_status.pack()
 
+        # --- Memória Principal ---
         mem_frame = ttk.LabelFrame(right_frame, text="Memória Principal")
         mem_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
@@ -302,10 +317,17 @@ Fim:
         self.update_ui(full_refresh=True)
         self.mem_list.yview_moveto(scroll_pos[0])
 
-    def draw_box(self, x, y, w, h, name, value_hex):
+    def draw_box(self, x, y, w, h, name, value_hex, display_label=None):
+        """
+        Desenha um registrador.
+        name: Chave interna (usada para tags).
+        display_label: Texto exibido ao usuário (se None, usa 'name').
+        """
         tag = f"reg_{name}"
+        label_text = display_label if display_label else name
+        
         self.canvas.create_rectangle(x, y, x+w, y+h, fill="#e1e1e1", outline="black", tags=tag)
-        self.canvas.create_text(x+w/2, y+15, text=name, font=("Arial", 8, "bold"))
+        self.canvas.create_text(x+w/2, y+15, text=label_text, font=("Arial", 8, "bold"))
         text = self.canvas.create_text(x+w/2, y+h/2+5, text=value_hex, font=("Consolas", 10, "bold"), tags=f"val_{name}")
         self.reg_rects[name] = tag
         self.reg_texts[name] = text
@@ -353,7 +375,13 @@ Fim:
 
         for i, name in enumerate(reg_order):
             y = y_start + i * gap_y
-            self.draw_box(reg_x, y, reg_w, reg_h, name, get_reg(name))
+            
+            # Correção Conceitual: Exibir "AC / H" para o registrador H
+            display_name = name
+            if name == "H":
+                display_name = "AC / H"
+                
+            self.draw_box(reg_x, y, reg_w, reg_h, name, get_reg(name), display_label=display_name)
             
             self.bus_ids[f'c_to_{name}'] = self.draw_line(
                 (bus_c_x, y + reg_h/2, reg_x + reg_w, y + reg_h/2), 
@@ -566,16 +594,25 @@ Fim:
         
         self.prev_pc, self.prev_sp, self.prev_addr = curr_pc, curr_sp, curr_addr
 
+        # --- ATUALIZAÇÃO DA CACHE ---
+        # Limpa apenas para repovoar corretamente
         for i in self.icache_tree.get_children(): self.icache_tree.delete(i)
         for i in self.dcache_tree.get_children(): self.dcache_tree.delete(i)
 
         for line in self.cpu.memory.i_cache.lines:
+            # Visualização segura para dados inválidos/resetados
+            valid_str = "1" if line['valid'] else "0"
             tag_str = f"{line['tag']:03X}" if line['valid'] else "000"
-            self.icache_tree.insert("", "end", values=("1" if line['valid'] else "0", tag_str, self.fmt_val(line['data'])))
+            data_str = self.fmt_val(line['data']) if line['valid'] else "0000"
+            
+            self.icache_tree.insert("", "end", values=(valid_str, tag_str, data_str))
             
         for line in self.cpu.memory.d_cache.lines:
+            valid_str = "1" if line['valid'] else "0"
             tag_str = f"{line['tag']:03X}" if line['valid'] else "000"
-            self.dcache_tree.insert("", "end", values=("1" if line['valid'] else "0", tag_str, self.fmt_val(line['data'])))
+            data_str = self.fmt_val(line['data']) if line['valid'] else "0000"
+            
+            self.dcache_tree.insert("", "end", values=(valid_str, tag_str, data_str))
 
         last_st = f"I: {self.cpu.memory.i_cache.last_status} | D: {self.cpu.memory.d_cache.last_status}"
         self.lbl_cache_status.config(text=last_st)
@@ -723,5 +760,12 @@ Fim:
         self.prev_addr = -1
         self.visual_micro_step = 0
         self.lbl_micro.config(text="Phase: IDLE")
+        
         self.cpu.reset()
+        
+        # --- CORREÇÃO VISUAL ---
+        # Força a limpeza das treeviews e repovoa com dados zerados
+        for i in self.icache_tree.get_children(): self.icache_tree.delete(i)
+        for i in self.dcache_tree.get_children(): self.dcache_tree.delete(i)
+        
         self.update_ui(full_refresh=True)
