@@ -58,27 +58,31 @@ class Mic1GUI:
         self.editor = CodeEditor(left_frame)
         self.editor.pack(fill=tk.BOTH, expand=True, padx=2)
         
-        default_code = """; --- ÁREA DE DADOS ---
-PRECO:  .DATA 100 20   
-FRETE:  .DATA 101 50   
-TOTAL:  .DATA 102 0    
+        default_code = """; --- PREPARAÇÃO (Criação de variáveis manuais) ---
+    LOCO 1          ; Carrega a constante 1 no Acumulador (H)
+    STOD 400        ; Salva o valor 1 no endereço 400 da RAM 
+                    ; (Usaremos este 1 para fazer subtrações)
 
-; --- INÍCIO DO PROGRAMA ---
+    LOCO 5          ; Carrega o valor inicial da contagem (5)
+    STOD 401        ; Salva o contador no endereço 401 da RAM
+
+; --- LOOP PRINCIPAL ---
 Inicio:
-    LODD PRECO   ; Carrega 20
-    SUBD FRETE   ; 20 - 50 = -30
-    JPOS Maior   ; Pula se positivo
+    LODD 401        ; Carrega o valor atual do contador (RAM 401 -> MDR -> H)
+    JZER Fim        ; Se o valor for ZERO, pula para o label 'Fim'
     
-    LOCO 1       ; Carrega 1 (Menor/Igual)
-    STOD TOTAL
-    JUMP Fim
+    PUSH            ; Empilha o valor atual (Observe o registrador SP mudando)
+                    ; Isso é ótimo para ver a Stack Pointer funcionar
+    
+    SUBD 400        ; Subtrai o valor do endereço 400 (que é 1) do acumulador
+    STOD 401        ; Salva o novo valor decrementado de volta na RAM 401
+    
+    JUMP Inicio     ; Pula incondicionalmente de volta para o 'Inicio'
 
-Maior:
-    LOCO 2       ; Carrega 2 (Maior)
-    STOD TOTAL
-
+; --- FINALIZAÇÃO ---
 Fim:
-    HALT
+    POP             ; (Opcional) Desempilha o último valor para limpar
+    HALT            ; Para a CPU
 """
         self.editor.set_code(default_code)
         ttk.Button(left_frame, text="Montar (Assemble)", command=self.assemble_code).pack(fill=tk.X, pady=5)
