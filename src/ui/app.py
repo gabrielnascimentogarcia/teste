@@ -1,112 +1,18 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
-from mic1_hardware import Mic1CPU, Opcode
-from assembler import assemble, OPCODES 
-
-class CodeEditor(tk.Frame):
-    """
-    Widget de editor de texto com numeração e syntax highlighting.
-    """
-    def __init__(self, master, **kwargs):
-        super().__init__(master, **kwargs)
-        
-        self.line_numbers = tk.Text(self, width=4, padx=4, takefocus=0, border=0,
-                                    background='#f0f0f0', state='disabled', font=("Consolas", 10))
-        self.line_numbers.pack(side=tk.LEFT, fill=tk.Y)
-        
-        self.text_area = tk.Text(self, font=("Consolas", 10), undo=True, wrap="none")
-        self.text_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.sync_scroll)
-        self.vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text_area.xview)
-        self.hsb.pack(side=tk.BOTTOM, fill=tk.X)
-        self.text_area['xscrollcommand'] = self.hsb.set
-        self.text_area['yscrollcommand'] = self.on_text_scroll
-
-        self.text_area.tag_configure("keyword", foreground="blue", font=("Consolas", 10, "bold"))
-        self.text_area.tag_configure("number", foreground="#c00000")
-        self.text_area.tag_configure("comment", foreground="#008000") 
-        self.text_area.tag_configure("label", foreground="#800080", font=("Consolas", 10, "bold"))
-        self.text_area.tag_configure("directive", foreground="#804000", font=("Consolas", 10, "bold"))
-
-        self.text_area.bind("<<Change>>", self.on_change)
-        self.text_area.bind("<KeyRelease>", self.on_change)
-        
-        self.prev_line_count = -1
-        self.update_line_numbers()
-
-    def sync_scroll(self, *args):
-        self.text_area.yview(*args)
-        self.line_numbers.yview(*args)
-
-    def on_text_scroll(self, *args):
-        self.vsb.set(*args)
-        self.line_numbers.yview_moveto(args[0])
-
-    def on_change(self, event=None):
-        self.update_line_numbers()
-        self.highlight_syntax()
-
-    def update_line_numbers(self):
-        current_lines = self.text_area.get('1.0', 'end-1c').count('\n') + 1
-        if current_lines != self.prev_line_count:
-            line_content = "\n".join(str(i) for i in range(1, current_lines + 1))
-            self.line_numbers.config(state='normal')
-            self.line_numbers.delete('1.0', tk.END)
-            self.line_numbers.insert('1.0', line_content)
-            self.line_numbers.config(state='disabled')
-            self.prev_line_count = current_lines
-        self.line_numbers.yview_moveto(self.text_area.yview()[0])
-
-    def highlight_syntax(self):
-        for tag in ["keyword", "number", "comment", "label", "directive"]:
-            self.text_area.tag_remove(tag, "1.0", tk.END)
-        
-        keywords = list(OPCODES.keys())
-        
-        start_idx = "1.0"
-        while True:
-            pos = self.text_area.search(';', start_idx, stopindex=tk.END)
-            if not pos: break
-            line_end = self.text_area.index(f"{pos} lineend")
-            self.text_area.tag_add("comment", pos, line_end)
-            start_idx = line_end
-
-        start_idx = "1.0"
-        while True:
-            pos = self.text_area.search(r'[\.\w]+', start_idx, stopindex=tk.END, regexp=True)
-            if not pos: break
-            end_pos = f"{pos} wordend"
-            word = self.text_area.get(pos, end_pos).upper()
-            
-            if "comment" not in self.text_area.tag_names(pos):
-                if word in keywords:
-                    self.text_area.tag_add("keyword", pos, end_pos)
-                elif word.startswith("."):
-                     self.text_area.tag_add("directive", pos, end_pos)
-                elif word.isdigit() or (word.startswith('0X') and len(word)>2):
-                    self.text_area.tag_add("number", pos, end_pos)
-                else:
-                    if self.text_area.get(end_pos, f"{end_pos}+1c") == ':':
-                        self.text_area.tag_add("label", pos, f"{end_pos}+1c")
-            start_idx = end_pos
-
-    def get_code(self): return self.text_area.get("1.0", tk.END)
-    def set_code(self, text):
-        self.text_area.delete("1.0", tk.END)
-        self.text_area.insert("1.0", text)
-        self.on_change()
-
+from src.hardware.cpu import Mic1CPU
+from src.common.opcodes import Opcode, OPCODE_MAP
+from src.assembler.core import assemble
+from src.ui.widgets import CodeEditor
 
 class Mic1GUI:
     """
     Aplicação GUI principal para o Simulador MIC-1.
+    Estrutura refatorada, visual clássico mantido.
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 / MAC-1 v6.5 (Corrigido)")
+        self.root.title("Simulador MIC-1 Profissional v7.1")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -114,23 +20,38 @@ class Mic1GUI:
         self.display_hex = True 
         self.run_speed_ms = 500
         self.anim_job = None
-        self.reset_lines_job = None # Controle de concorrência visual
+        self.reset_lines_job = None
         self.visual_micro_step = 0 
         
         self.follow_pc = tk.BooleanVar(value=True)
         self.user_interacting = False 
         
-        self.rev_opcodes = {}
-        for k, v in OPCODES.items():
-            self.rev_opcodes[v] = k
-        
+        # Setup Visual
         style = ttk.Style()
         style.theme_use('clam')
         
-        self.paned_window = ttk.PanedWindow(root, orient=tk.HORIZONTAL)
+        self._setup_layout()
+        
+        # Variáveis de controle visual
+        self.reg_rects = {}
+        self.reg_texts = {}
+        self.bus_ids = {}
+        self.control_label_id = None
+        self.prev_pc = -1
+        self.prev_sp = -1
+        self.prev_addr = -1
+        
+        # Inicialização
+        self.root.update_idletasks()
+        self.draw_datapath_layout()
+        self.init_memory_list()
+        self.update_ui(full_refresh=True)
+
+    def _setup_layout(self):
+        self.paned_window = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         self.paned_window.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Painel Esquerdo: Editor
+        # --- PAINEL ESQUERDO: EDITOR ---
         left_frame = ttk.Frame(self.paned_window, width=380)
         self.paned_window.add(left_frame, weight=1)
         ttk.Label(left_frame, text="Editor Assembly", font=("Arial", 10, "bold")).pack(pady=5)
@@ -144,17 +65,16 @@ TOTAL:  .DATA 102 0
 
 ; --- INÍCIO DO PROGRAMA ---
 Inicio:
-    LODD PRECO   ; Busca valor de PRECO (20)
-    SUBD FRETE   ; Subtrai FRETE (20 - 50 = -30)
-    JPOS Maior   ; Se AC > 0, Pula (Não deve pular pois é negativo)
+    LODD PRECO   ; Carrega 20
+    SUBD FRETE   ; 20 - 50 = -30
+    JPOS Maior   ; Pula se positivo
     
-    ; Se chegou aqui, é menor ou igual
-    LOCO 1       ; Carrega 1 para indicar "Menor/Igual"
+    LOCO 1       ; Carrega 1 (Menor/Igual)
     STOD TOTAL
     JUMP Fim
 
 Maior:
-    LOCO 2       ; Carrega 2 para indicar "Maior"
+    LOCO 2       ; Carrega 2 (Maior)
     STOD TOTAL
 
 Fim:
@@ -163,7 +83,7 @@ Fim:
         self.editor.set_code(default_code)
         ttk.Button(left_frame, text="Montar (Assemble)", command=self.assemble_code).pack(fill=tk.X, pady=5)
 
-        # Painel Central
+        # --- PAINEL CENTRAL: DATAPATH (CANVAS) ---
         center_frame = ttk.Frame(self.paned_window, width=650)
         self.paned_window.add(center_frame, weight=3)
         ttk.Label(center_frame, text="Microarquitetura (Datapath MIC-1)", font=("Arial", 10, "bold")).pack(pady=5)
@@ -181,7 +101,7 @@ Fim:
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
         self.canvas.bind("<Configure>", self.on_canvas_resize)
         
-        # Painel Direito
+        # --- PAINEL DIREITO: CONTROLES E MEMÓRIA ---
         right_frame = ttk.Frame(self.paned_window, width=320)
         self.paned_window.add(right_frame, weight=1)
         
@@ -195,7 +115,6 @@ Fim:
         ttk.Button(btn_f, text="Stop", command=self.stop_run).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_f, text="Reset", command=self.reset_cpu).pack(side=tk.LEFT, padx=2)
         
-        # Polimento UX: Texto explícito sobre o estado atual
         self.btn_mode = ttk.Button(ctrl_frame, text="Visualização: HEX", command=self.toggle_display_mode)
         self.btn_mode.pack(side=tk.RIGHT, padx=5, pady=2)
         
@@ -210,27 +129,23 @@ Fim:
         self.lbl_micro = ttk.Label(ctrl_frame, text="Phase: IDLE", foreground="red")
         self.lbl_micro.pack(side=tk.RIGHT, padx=5)
 
-        # --- Caches L1 (Corrigido com Scrollbar) ---
+        # --- Caches L1 ---
         cache_main_frame = ttk.LabelFrame(right_frame, text="Caches L1 (Split)")
         cache_main_frame.pack(fill=tk.X, padx=5, pady=5)
         split_cache = ttk.Frame(cache_main_frame)
         split_cache.pack(fill=tk.X)
         cols = ("valid", "tag", "data")
-        
         col_width = 45
         
         # I-Cache
         icache_frame = ttk.Frame(split_cache)
         icache_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         ttk.Label(icache_frame, text="I-Cache", font=("Arial", 8, "bold")).pack()
-        
-        # Adicionado Scrollbar para I-Cache
         self.icache_tree = ttk.Treeview(icache_frame, columns=cols, show="headings", height=8)
         icache_scroll = ttk.Scrollbar(icache_frame, orient="vertical", command=self.icache_tree.yview)
         self.icache_tree.configure(yscrollcommand=icache_scroll.set)
         icache_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.icache_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
         for c in cols: 
             self.icache_tree.heading(c, text=c[0].upper())
             self.icache_tree.column(c, width=col_width, anchor="center")
@@ -239,14 +154,11 @@ Fim:
         dcache_frame = ttk.Frame(split_cache)
         dcache_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         ttk.Label(dcache_frame, text="D-Cache", font=("Arial", 8, "bold")).pack()
-        
-        # Adicionado Scrollbar para D-Cache
         self.dcache_tree = ttk.Treeview(dcache_frame, columns=cols, show="headings", height=8)
         dcache_scroll = ttk.Scrollbar(dcache_frame, orient="vertical", command=self.dcache_tree.yview)
         self.dcache_tree.configure(yscrollcommand=dcache_scroll.set)
         dcache_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.dcache_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
         for c in cols: 
             self.dcache_tree.heading(c, text=c[0].upper())
             self.dcache_tree.column(c, width=col_width, anchor="center")
@@ -277,19 +189,7 @@ Fim:
         mem_scroll.bind("<Button-1>", lambda e: self.set_interacting(True))
         mem_scroll.bind("<ButtonRelease-1>", lambda e: self.set_interacting(False))
 
-        self.reg_rects = {}
-        self.reg_texts = {}
-        self.bus_ids = {}
-        self.control_label_id = None
-        
-        self.prev_pc = -1
-        self.prev_sp = -1
-        self.prev_addr = -1
-        
-        self.root.update_idletasks()
-        self.draw_datapath_layout()
-        self.init_memory_list()
-        self.update_ui(full_refresh=True)
+    # --- Lógica de Visualização e Controle ---
 
     def set_interacting(self, status):
         self.user_interacting = status
@@ -311,21 +211,14 @@ Fim:
     def toggle_display_mode(self):
         scroll_pos = self.mem_list.yview()
         self.display_hex = not self.display_hex
-        # Polimento UX: Texto reflete o estado ATUAL
         mode_text = "HEX" if self.display_hex else "DEC"
         self.btn_mode.config(text=f"Visualização: {mode_text}")
         self.update_ui(full_refresh=True)
         self.mem_list.yview_moveto(scroll_pos[0])
 
     def draw_box(self, x, y, w, h, name, value_hex, display_label=None):
-        """
-        Desenha um registrador.
-        name: Chave interna (usada para tags).
-        display_label: Texto exibido ao usuário (se None, usa 'name').
-        """
         tag = f"reg_{name}"
         label_text = display_label if display_label else name
-        
         self.canvas.create_rectangle(x, y, x+w, y+h, fill="#e1e1e1", outline="black", tags=tag)
         self.canvas.create_text(x+w/2, y+15, text=label_text, font=("Arial", 8, "bold"))
         text = self.canvas.create_text(x+w/2, y+h/2+5, text=value_hex, font=("Consolas", 10, "bold"), tags=f"val_{name}")
@@ -337,9 +230,6 @@ Fim:
                                      capstyle=tk.ROUND, joinstyle=tk.ROUND, tags=tags)
 
     def draw_datapath_layout(self):
-        """
-        Desenha o Datapath da MIC-1.
-        """
         self.canvas.delete("all")
         self.reg_rects = {}
         self.reg_texts = {}
@@ -375,12 +265,7 @@ Fim:
 
         for i, name in enumerate(reg_order):
             y = y_start + i * gap_y
-            
-            # Correção Conceitual: Exibir "AC / H" para o registrador H
-            display_name = name
-            if name == "H":
-                display_name = "AC / H"
-                
+            display_name = "AC / H" if name == "H" else name
             self.draw_box(reg_x, y, reg_w, reg_h, name, get_reg(name), display_label=display_name)
             
             self.bus_ids[f'c_to_{name}'] = self.draw_line(
@@ -404,19 +289,16 @@ Fim:
         )
         self.canvas.create_text(reg_x - 30, h_y + reg_h + 10, text="Bus A", font=("Arial", 8, "bold"), fill="#555")
 
-        # ALU (Forma Gráfica)
+        # ALU
         self.canvas.create_polygon(cx-40, alu_y, cx+40, alu_y, cx+20, alu_y+50, cx-20, alu_y+50, 
                                    fill="#ffcccb", outline="black", width=2)
         self.canvas.create_text(cx, alu_y+25, text="ALU", font=("Arial", 11, "bold"))
-        
         self.draw_line((bus_b_x, bus_bottom_y, cx-30, bus_bottom_y), arrow=tk.LAST, tags="bus_b_to_alu")
 
         shift_y = alu_y + 60
         self.canvas.create_rectangle(cx-30, shift_y, cx+30, shift_y+30, fill="#add8e6", outline="black")
         self.canvas.create_text(cx, shift_y+15, text="Shifter", font=("Arial", 9))
-        
         self.canvas.create_line(cx, alu_y+50, cx, shift_y, width=4, fill="gray", tags="alu_to_shifter")
-        
         self.draw_line((cx, shift_y+30, cx, shift_y+45, bus_c_x, shift_y+45, bus_c_x, bus_bottom_y + 60), 
                        width=4, arrow=tk.LAST, tags="bus_c")
 
@@ -424,9 +306,7 @@ Fim:
         ram_y = y_start
         self.canvas.create_rectangle(ram_x, ram_y, ram_x + 60, ram_y + gap_y + reg_h, fill="#fff0b3", outline="black")
         self.canvas.create_text(ram_x + 30, ram_y + gap_y, text="RAM", font=("Arial", 10, "bold"))
-        
         self.draw_line((reg_x, y_start + 10, ram_x + 60, y_start + 10), arrow=tk.LAST, color="black", width=1, tags="ram_addr")
-        
         mdr_y = y_start + gap_y
         self.draw_line((ram_x + 60, mdr_y + 20, reg_x, mdr_y + 20), arrow=tk.BOTH, color="black", width=1, tags="ram_data")
 
@@ -436,7 +316,6 @@ Fim:
         if hasattr(self, 'cpu'): self.update_ui_values_only()
 
     def animate_buses(self):
-        # Cancelar reset anterior se houver (evita race condition visual)
         if self.reset_lines_job:
             self.root.after_cancel(self.reset_lines_job)
             self.reset_lines_job = None
@@ -452,30 +331,24 @@ Fim:
         
         opcode = self.cpu.current_opcode
         step = self.visual_micro_step
-        
         bus_activity = self.cpu.bus_activity
 
-        # Polimento Acadêmico: Nomes de fases mais precisos
         if step == 1: 
             tags_to_light = ["main_bus_b", "PC_to_b", "main_bus_c", "bus_c", "c_to_MAR"]
             self.lbl_micro.config(text="1. BUSCA (Fetch: PC -> MAR)")
-
         elif step == 2:
             tags_to_light = []
             if bus_activity['mem_read']: tags_to_light += ["ram_addr", "ram_data"]
             tags_to_light += ["c_to_MDR", "main_bus_c", "bus_c", "c_to_MBR"]
             self.lbl_micro.config(text="2. DECODIFICAÇÃO (Decode)")
-
         elif step == 3:
             self.lbl_micro.config(text="3. EXECUÇÃO (Execute)")
-            
             if bus_activity['bus_b']: tags_to_light.append("main_bus_b")
             if bus_activity['bus_b']: tags_to_light.append("bus_b_to_alu")
             if bus_activity['bus_a']: tags_to_light.append("h_to_alu_a") 
-
-            # Correção de Arquitetura: Visualizar o Shifter sempre que a ALU for usada
             tags_to_light.append("alu_to_shifter")
 
+            # Mapa de animação baseado no novo Hardware (usando Opcode Enum)
             if opcode in [Opcode.ADDD, Opcode.SUBD, Opcode.LODD, Opcode.ADDL, Opcode.SUBL]:
                  tags_to_light += ["MDR_to_b", "h_to_alu_a"]
                  if bus_activity['mem_read']: tags_to_light.append("ram_data") 
@@ -488,11 +361,8 @@ Fim:
 
         elif step == 4:
             self.lbl_micro.config(text="4. GRAVAÇÃO (Write Back)")
-            
-            # Shifter sempre envolvido no caminho para Bus C
             base_tags = ["alu_to_shifter", "main_bus_c", "bus_c"]
             tags_to_light = base_tags[:]
-            
             if bus_activity['mem_write']: tags_to_light += ["ram_addr", "ram_data"]
             
             if opcode in [Opcode.LODD, Opcode.ADDD, Opcode.SUBD, Opcode.LOCO, Opcode.LODL, Opcode.ADDL, Opcode.SUBL]:
@@ -534,20 +404,16 @@ Fim:
 
     def update_memory_row(self, idx, is_pc=False, is_sp=False, is_access=False):
         if idx < 0 or idx >= 4096: return
-        
         val = self.cpu.memory.ram[idx]
         markers = []
         if is_pc: markers.append("PC")
         if is_sp: markers.append("SP")
         marker_str = f" [{', '.join(markers)}]" if markers else ""
-        
         text = f"[{idx:03X} | {idx:04d}]: {self.fmt_val(val)}{marker_str}"
-        
         try:
             if self.mem_list.get(idx) != text:
                 self.mem_list.delete(idx)
                 self.mem_list.insert(idx, text)
-            
             bg = "white"
             if is_access: bg = "#ffffcc"
             elif is_pc: bg = "#e6f3ff"
@@ -557,7 +423,6 @@ Fim:
 
     def update_ui(self, full_refresh=False):
         self.update_ui_values_only()
-        
         curr_pc = self.cpu.pc.value
         curr_sp = self.cpu.sp.value
         curr_addr = self.cpu.memory.last_accessed_addr
@@ -567,11 +432,11 @@ Fim:
             raw_instr = self.cpu.memory.ram[target_addr]
             opcode_base = raw_instr & 0xF000
             operand = raw_instr & 0xFFF
-            
-            mnemonic = self.rev_opcodes.get(opcode_base, "UNK")
+            # Reverse mapping
+            rev_op = {v: k for k, v in OPCODE_MAP.items()}
+            mnemonic = rev_op.get(opcode_base, "UNK")
             if opcode_base == 0xF000: 
-                mnemonic = self.rev_opcodes.get(raw_instr, "UNK")
-                
+                mnemonic = rev_op.get(raw_instr, "UNK")
             instr_str = f"{mnemonic} {operand:03X}" if self.display_hex else f"{mnemonic} {operand}"
             self.lbl_curr_instr.config(text=f"Next: [{target_addr:03X}] | {instr_str}")
 
@@ -594,24 +459,20 @@ Fim:
         
         self.prev_pc, self.prev_sp, self.prev_addr = curr_pc, curr_sp, curr_addr
 
-        # --- ATUALIZAÇÃO DA CACHE ---
-        # Limpa apenas para repovoar corretamente
+        # --- Cache Update ---
         for i in self.icache_tree.get_children(): self.icache_tree.delete(i)
         for i in self.dcache_tree.get_children(): self.dcache_tree.delete(i)
 
         for line in self.cpu.memory.i_cache.lines:
-            # Visualização segura para dados inválidos/resetados
-            valid_str = "1" if line['valid'] else "0"
-            tag_str = f"{line['tag']:03X}" if line['valid'] else "000"
-            data_str = self.fmt_val(line['data']) if line['valid'] else "0000"
-            
+            valid_str = "1" if line.valid else "0"
+            tag_str = f"{line.tag:03X}" if line.valid else "000"
+            data_str = self.fmt_val(line.data) if line.valid else "0000"
             self.icache_tree.insert("", "end", values=(valid_str, tag_str, data_str))
             
         for line in self.cpu.memory.d_cache.lines:
-            valid_str = "1" if line['valid'] else "0"
-            tag_str = f"{line['tag']:03X}" if line['valid'] else "000"
-            data_str = self.fmt_val(line['data']) if line['valid'] else "0000"
-            
+            valid_str = "1" if line.valid else "0"
+            tag_str = f"{line.tag:03X}" if line.valid else "000"
+            data_str = self.fmt_val(line.data) if line.valid else "0000"
             self.dcache_tree.insert("", "end", values=(valid_str, tag_str, data_str))
 
         last_st = f"I: {self.cpu.memory.i_cache.last_status} | D: {self.cpu.memory.d_cache.last_status}"
@@ -628,49 +489,34 @@ Fim:
 
         self.canvas.itemconfig(self.control_label_id, text=self.cpu.control_signals)
         self.lbl_cycle.config(text=f"Cycles: {self.cpu.cycle_count} | Flags: N={int(self.cpu.alu.n_flag)} Z={int(self.cpu.alu.z_flag)}")
-        
         self.animate_buses()
 
     def edit_memory_value(self, event):
         sel = self.mem_list.curselection()
         if not sel: return
         addr = sel[0]
-        
-        prompt = f"Valor para Mem[{addr:03X} | {addr:04d}]" + (" (HEX):" if self.display_hex else ":")
+        prompt = f"Valor para Mem[{addr:03X}]" + (" (HEX):" if self.display_hex else ":")
         self.user_interacting = True 
         res = simpledialog.askstring("Editar", prompt)
         self.user_interacting = False
-        
         if res:
             try:
-                val = 0
-                clean_res = res.strip().upper()
-                if self.display_hex: val = int(clean_res, 16)
-                elif clean_res.startswith("0X"): val = int(clean_res, 16)
-                else: val = int(clean_res)
-                
+                val = int(res, 16) if self.display_hex or res.upper().startswith("0X") else int(res)
                 self.cpu.memory.write(addr, val)
                 self.update_memory_row(addr, addr==self.cpu.pc.value, addr==self.cpu.sp.value, True)
-            except ValueError: messagebox.showerror("Erro", "Valor inválido! Use formato compatível com o modo (HEX/DEC).")
+            except ValueError: messagebox.showerror("Erro", "Valor inválido!")
 
     def assemble_code(self):
         mc, msg = assemble(self.editor.get_code())
         if not mc and msg != "Sucesso":
             messagebox.showerror("Erro", msg)
             return
-        
         self.reset_cpu()
         self.cpu.memory.load_program(mc)
         self.update_ui(full_refresh=True)
-        
-        count = len(mc) if isinstance(mc, dict) else len(mc)
-        messagebox.showinfo("Montagem", f"Sucesso! {count} palavras/instruções carregadas.")
+        messagebox.showinfo("Montagem", f"Sucesso! {len(mc)} palavras carregadas.")
 
     def perform_micro_step(self):
-        """
-        Executa um micro-passo lógico da CPU e atualiza a UI.
-        Retorna True se o ciclo foi concluído (voltou para 0), False caso contrário.
-        """
         if self.cpu.halted:
             self.is_running = False
             messagebox.showinfo("Fim", "CPU Halt.")
@@ -681,18 +527,15 @@ Fim:
             self.cpu.step_1_fetch_addr() 
             self.update_ui()
             return False
-            
         elif self.visual_micro_step == 1:
             self.visual_micro_step = 2
             self.cpu.step_2_fetch_mem_decode() 
             self.update_ui()
             return False
-            
         elif self.visual_micro_step == 2:
             self.visual_micro_step = 3
             self.update_ui()
             return False
-            
         elif self.visual_micro_step == 3:
             self.visual_micro_step = 4
             try:
@@ -700,10 +543,9 @@ Fim:
                 self.update_ui()
             except Exception as e:
                 self.is_running = False
-                messagebox.showerror("Runtime Error", str(e))
+                messagebox.showerror("Erro", str(e))
                 return True 
             return False
-                
         elif self.visual_micro_step == 4:
             self.visual_micro_step = 0
             self.lbl_micro.config(text="Phase: IDLE (Next Instr)")
@@ -711,10 +553,7 @@ Fim:
             return True 
 
     def step_button_action(self):
-        # Correção UX: Permitir avanço manual mesmo se estiver pausado, 
-        # mas bloqueia apenas se o loop automático estiver rodando para evitar conflito.
-        if self.is_running: 
-            return 
+        if self.is_running: return 
         self.perform_micro_step()
 
     def start_run(self):
@@ -726,46 +565,26 @@ Fim:
         if not self.is_running or self.cpu.halted:
             self.is_running = False
             return
-
-        cycle_completed = self.perform_micro_step()
-        
+        self.perform_micro_step()
         if self.follow_pc.get() and not self.user_interacting:
              self.mem_list.see(self.cpu.pc.value)
-        
         self.root.after(self.run_speed_ms, self.run_loop)
 
     def stop_run(self): 
         self.is_running = False
-        # Não resetamos o visual_micro_step para permitir 'Pause' e 'Resume'
-        # self.visual_micro_step = 0 
         self.reset_lines()
         self.lbl_micro.config(text="Phase: PAUSED")
         self.update_ui(full_refresh=True)
     
     def reset_cpu(self):
         self.stop_run()
-        
-        if self.reset_lines_job:
-            self.root.after_cancel(self.reset_lines_job)
-            self.reset_lines_job = None
-            
-        if self.anim_job:
-            self.root.after_cancel(self.anim_job)
-            self.anim_job = None
-            
+        if self.reset_lines_job: self.root.after_cancel(self.reset_lines_job)
+        if self.anim_job: self.root.after_cancel(self.anim_job)
         self.reset_lines()
-            
         self.prev_pc = -1
         self.prev_sp = -1
         self.prev_addr = -1
         self.visual_micro_step = 0
         self.lbl_micro.config(text="Phase: IDLE")
-        
         self.cpu.reset()
-        
-        # --- CORREÇÃO VISUAL ---
-        # Força a limpeza das treeviews e repovoa com dados zerados
-        for i in self.icache_tree.get_children(): self.icache_tree.delete(i)
-        for i in self.dcache_tree.get_children(): self.dcache_tree.delete(i)
-        
         self.update_ui(full_refresh=True)
