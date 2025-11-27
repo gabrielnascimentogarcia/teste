@@ -8,11 +8,11 @@ from src.ui.widgets import CodeEditor
 class Mic1GUI:
     """
     Aplicação GUI principal para o Simulador MIC-1.
-    Versão 7.4 - Correção Meticulosa de Caminhos e Componentes.
+    Versão 7.5 - Correção Visual de Caminhos de Dados (PUSH/POP Fix).
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 Profissional v7.4")
+        self.root.title("Simulador MIC-1 Profissional v7.5")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -379,8 +379,10 @@ Fim:
             
             # Base paths present in Execute/Writeback
             if step == 3: # Inputs to ALU
-                tags += ["bus_b_to_alu"]
-                comps += ["comp_ALU"]
+                # Base para maioria das operações, mas pode ser sobrescrito abaixo (ex: STOD apenas A)
+                # Vamos adicionar apenas se não houver conflito específico, mas a lógica abaixo trata melhor.
+                comps += ["comp_ALU"] 
+
             if step == 4: # Outputs from Shifter/Bus C
                 tags += ["alu_to_shifter", "main_bus_c", "bus_c"]
                 comps += ["comp_Shifter"]
@@ -389,41 +391,32 @@ Fim:
             
             # --- ALU OPERATIONS (ADDD, SUBD, ADDL, SUBL) ---
             if opcode in [Opcode.ADDD, Opcode.SUBD, Opcode.ADDL, Opcode.SUBL]:
-                # Step 3: H (Bus A) and MDR (Bus B) -> ALU
                 if step == 3:
-                    tags += ["h_to_alu_a", "MDR_to_b", "main_bus_b"]
-                # Step 4: Result -> H
+                    tags += ["h_to_alu_a", "MDR_to_b", "main_bus_b", "bus_b_to_alu"]
                 if step == 4:
                     tags += ["c_to_H"]
-                    # If memory read was part of operation, keep data line active
                     if bus_activity['mem_read']: 
                         tags += ["ram_data"]
                         comps += ["comp_RAM"]
 
             # --- LOAD OPERATIONS (LODD, LODL) ---
             elif opcode in [Opcode.LODD, Opcode.LODL]:
-                # Step 3: MDR (Bus B) -> ALU (Pass B) -> H
                 if step == 3:
-                    tags += ["MDR_to_b", "main_bus_b"]
-                # Step 4: Result -> H
+                    tags += ["MDR_to_b", "main_bus_b", "bus_b_to_alu"]
                 if step == 4:
                     tags += ["c_to_H"]
 
             # --- LOAD CONSTANT (LOCO) ---
             elif opcode == Opcode.LOCO:
-                # Step 3: MBR (Bus B) -> ALU
                 if step == 3:
-                    tags += ["MBR_to_b", "main_bus_b"]
-                # Step 4: Result -> H
+                    tags += ["MBR_to_b", "main_bus_b", "bus_b_to_alu"]
                 if step == 4:
                     tags += ["c_to_H"]
 
             # --- STORE OPERATIONS (STOD, STOL) ---
             elif opcode in [Opcode.STOD, Opcode.STOL]:
-                # Step 3: H (Bus A) -> ALU -> ...
                 if step == 3:
-                    tags += ["h_to_alu_a"]
-                # Step 4: ... -> MDR (to be written to mem)
+                    tags += ["h_to_alu_a"] # Apenas H vai para a ALU
                 if step == 4:
                     tags += ["c_to_MDR"]
                     if bus_activity['mem_write']: 
@@ -432,18 +425,15 @@ Fim:
 
             # --- JUMPS (JUMP, JPOS, JZER, JNEG, JNZE) ---
             elif opcode in [Opcode.JUMP, Opcode.JPOS, Opcode.JZER, Opcode.JNEG, Opcode.JNZE]:
-                # Step 3: MBR (Address on Bus B) -> ALU
                 if step == 3:
-                    tags += ["MBR_to_b", "main_bus_b"]
-                # Step 4: ... -> PC
+                    tags += ["MBR_to_b", "main_bus_b", "bus_b_to_alu"]
                 if step == 4:
                     tags += ["c_to_PC"]
 
             # --- CALL ---
             elif opcode == Opcode.CALL:
-                # Complex: Save PC -> Mem, Jump MBR -> PC
                 if step == 3:
-                    tags += ["PC_to_b", "main_bus_b"] # Save PC
+                    tags += ["PC_to_b", "main_bus_b", "bus_b_to_alu"] # Save PC
                 if step == 4:
                     tags += ["c_to_MDR", "c_to_SP"] # Write to stack buffer, update SP
                     tags += ["c_to_PC"] # And update PC
@@ -451,11 +441,11 @@ Fim:
             # --- STACK OPS (PUSH) ---
             elif IS_PUSH:
                 if step == 3:
-                    # PUSH puts H onto Stack. Needs to use SP to address.
-                    # PUSH decrement SP first.
-                    tags += ["h_to_alu_a", "SP_to_b", "main_bus_b"] 
+                    # CORREÇÃO: H vai para ALU (via Bus A ou direto se possível, aqui simulamos Bus A)
+                    # O decremento do SP é interno na simulação hardware. Visualmente, focamos no dado.
+                    tags += ["h_to_alu_a"] 
                 if step == 4:
-                    tags += ["c_to_MDR", "c_to_SP"] # To MDR (write) and SP update
+                    tags += ["c_to_MDR", "c_to_SP"] # Dado para MDR e SP atualiza visualmente
                     if bus_activity['mem_write']: 
                         tags += ["ram_data"]
                         comps += ["comp_RAM"]
@@ -463,28 +453,30 @@ Fim:
             # --- STACK OPS (POP) ---
             elif IS_POP:
                 if step == 3:
-                    tags += ["MDR_to_b", "main_bus_b", "SP_to_b"] # Data from Mem, SP increment
+                    # CORREÇÃO: MDR (dado lido) vai para Bus B. 
+                    # SP incrementa implicitamente/visualmente no passo 4.
+                    tags += ["MDR_to_b", "main_bus_b", "bus_b_to_alu"]
                 if step == 4:
-                    tags += ["c_to_H", "c_to_SP"] # To H, update SP
+                    tags += ["c_to_H", "c_to_SP"] # Grava em H e atualiza SP
 
             # --- RETURN (RETN) ---
             elif IS_RETN:
                 if step == 3:
-                    tags += ["MDR_to_b", "main_bus_b", "SP_to_b"] # Ret Addr from Mem
+                    tags += ["MDR_to_b", "main_bus_b", "bus_b_to_alu"] # Ret Addr from Mem
                 if step == 4:
                     tags += ["c_to_PC", "c_to_SP"] # To PC, update SP
 
             # --- SWAP ---
             elif IS_SWAP:
                 if step == 3:
-                    tags += ["h_to_alu_a", "SP_to_b", "main_bus_b"]
+                    tags += ["h_to_alu_a", "SP_to_b", "main_bus_b", "bus_b_to_alu"]
                 if step == 4:
                     tags += ["c_to_H", "c_to_SP"] # Swap complete
 
             # --- SP ARITHMETIC (INSP, DESP) ---
             elif IS_INSP or IS_DESP:
                 if step == 3:
-                    tags += ["SP_to_b", "main_bus_b"]
+                    tags += ["SP_to_b", "main_bus_b", "bus_b_to_alu"]
                 if step == 4:
                     tags += ["c_to_SP"]
 
