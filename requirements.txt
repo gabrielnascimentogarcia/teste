@@ -1,6 +1,0 @@
-# O Tkinter é uma biblioteca padrão do Python, mas no Linux
-# geralmente requer instalação via pacote do sistema:
-# sudo apt-get install python3-tk
-
-# Ferramentas de desenvolvimento (opcional, mas recomendado para testes)
-pytest>=7.0.0

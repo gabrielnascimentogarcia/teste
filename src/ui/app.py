@@ -6,724 +6,603 @@ from src.assembler.core import assemble
 from src.ui.widgets import CodeEditor
 
 class Mic1GUI:
-    """
-    Aplicação GUI principal para o Simulador MIC-1.
-    Versão 7.5 - Correção Visual de Caminhos de Dados (PUSH/POP Fix).
-    """
+    """Interface Principal do Simulador"""
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 Profissional v7.5")
+        self.root.title("Simulador MIC-1")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
-        self.is_running = False
-        self.display_hex = True 
-        self.run_speed_ms = 500
-        self.anim_job = None
-        self.reset_lines_job = None
-        self.visual_micro_step = 0 
+        self.running = False
+        self.hex_mode = True # Comeca mostrando em Hex
+        self.speed = 500
+        self.job = None
+        self.reset_job = None
+        self.u_step = 0 # Contador de micro-passos (0 a 4)
         
         self.follow_pc = tk.BooleanVar(value=True)
-        self.user_interacting = False 
+        self.interacting = False 
         
-        # Setup Visual
+        # Tema da interface (clam fica menos feio no Linux/Windows)
         style = ttk.Style()
         style.theme_use('clam')
         
-        self._setup_layout()
+        self._init_layout()
         
-        # Variáveis de controle visual
-        self.reg_rects = {}
-        self.reg_texts = {}
-        self.bus_ids = {}
-        self.control_label_id = None
-        self.prev_pc = -1
-        self.prev_sp = -1
-        self.prev_addr = -1
+        # Referencias pros objetos desenhados no canvas
+        self.reg_gfx = {}
+        self.reg_txt = {}
+        self.bus_gfx = {}
+        self.sig_lbl = None
+        self.last_pc = -1
+        self.last_sp = -1
+        self.last_acc = -1
         
-        # Inicialização
         self.root.update_idletasks()
-        self.draw_datapath_layout()
-        self.init_memory_list()
-        self.update_ui(full_refresh=True)
+        self.draw_datapath()
+        self.init_mem_ui()
+        self.update_ui(full=True)
 
-    def _setup_layout(self):
-        self.paned_window = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        self.paned_window.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    def _init_layout(self):
+        panes = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        panes.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # --- PAINEL ESQUERDO: EDITOR ---
-        left_frame = ttk.Frame(self.paned_window, width=380)
-        self.paned_window.add(left_frame, weight=1)
-        ttk.Label(left_frame, text="Editor Assembly", font=("Arial", 10, "bold")).pack(pady=5)
-        self.editor = CodeEditor(left_frame)
+        # --- ESQUERDA: EDITOR ---
+        lhs = ttk.Frame(panes, width=380)
+        panes.add(lhs, weight=1)
+        ttk.Label(lhs, text="Codigo Fonte (Assembly)", font=("Arial", 9, "bold")).pack(pady=5)
+        self.editor = CodeEditor(lhs)
         self.editor.pack(fill=tk.BOTH, expand=True, padx=2)
         
-        default_code = """; --- PREPARAÇÃO (Criação de variáveis manuais) ---
-    LOCO 1          ; Carrega a constante 1 no Acumulador (H)
-    STOD 400        ; Salva o valor 1 no endereço 400 da RAM 
-                    ; (Usaremos este 1 para fazer subtrações)
+        # Codigo de exemplo pra nao comecar vazio
+        src = """; Setup Inicial
+    LOCO 1
+    STOD 400    ; Guarda 1 no end 400
+    LOCO 5
+    STOD 401    ; Contador = 5
 
-    LOCO 5          ; Carrega o valor inicial da contagem (5)
-    STOD 401        ; Salva o contador no endereço 401 da RAM
+; Loop Principal
+Main:
+    LODD 401    ; Carrega contador
+    JZER Fim    ; Se for zero, sai
+    PUSH        ; Teste de Pilha
+    SUBD 400    ; Decrementa (R = R - 1)
+    STOD 401
+    JUMP Main   ; Volta pro inicio
 
-; --- LOOP PRINCIPAL ---
-Inicio:
-    LODD 401        ; Carrega o valor atual do contador (RAM 401 -> MDR -> H)
-    JZER Fim        ; Se o valor for ZERO, pula para o label 'Fim'
-    
-    PUSH            ; Empilha o valor atual (Observe o registrador SP mudando)
-                    ; Isso é ótimo para ver a Stack Pointer funcionar
-    
-    SUBD 400        ; Subtrai o valor do endereço 400 (que é 1) do acumulador
-    STOD 401        ; Salva o novo valor decrementado de volta na RAM 401
-    
-    JUMP Inicio     ; Pula incondicionalmente de volta para o 'Inicio'
-
-; --- FINALIZAÇÃO ---
+; Fim do programa
 Fim:
-    POP             ; (Opcional) Desempilha o último valor para limpar
-    HALT            ; Para a CPU
+    POP
+    HALT
 """
-        self.editor.set_code(default_code)
-        ttk.Button(left_frame, text="Montar (Assemble)", command=self.assemble_code).pack(fill=tk.X, pady=5)
+        self.editor.set_src(src)
+        ttk.Button(lhs, text="Montar (Assemble)", command=self.do_assemble).pack(fill=tk.X, pady=5)
 
-        # --- PAINEL CENTRAL: DATAPATH (CANVAS) ---
-        center_frame = ttk.Frame(self.paned_window, width=650)
-        self.paned_window.add(center_frame, weight=3)
-        ttk.Label(center_frame, text="Microarquitetura (Datapath MIC-1)", font=("Arial", 10, "bold")).pack(pady=5)
+        # --- CENTRO: DATAPATH (CANVAS) ---
+        center = ttk.Frame(panes, width=650)
+        panes.add(center, weight=3)
+        ttk.Label(center, text="Caminho de Dados (Visual)", font=("Arial", 9, "bold")).pack(pady=5)
         
-        canvas_frame = ttk.Frame(center_frame)
-        canvas_frame.pack(fill=tk.BOTH, expand=True)
+        cv_frame = ttk.Frame(center)
+        cv_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.canvas = tk.Canvas(canvas_frame, bg="white", bd=2, relief="sunken")
-        vbar = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=self.canvas.yview)
-        hbar = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
+        # Canvas branco com scrollbars
+        self.canvas = tk.Canvas(cv_frame, bg="#fafafa", bd=2, relief="sunken")
+        vbar = ttk.Scrollbar(cv_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        hbar = ttk.Scrollbar(cv_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
         self.canvas.configure(yscrollcommand=vbar.set, xscrollcommand=hbar.set)
         
         vbar.pack(side=tk.RIGHT, fill=tk.Y)
         hbar.pack(side=tk.BOTTOM, fill=tk.X)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-        self.canvas.bind("<Configure>", self.on_canvas_resize)
+        self.canvas.bind("<Configure>", self.on_resize)
         
-        # --- PAINEL DIREITO: CONTROLES E MEMÓRIA ---
-        right_frame = ttk.Frame(self.paned_window, width=320)
-        self.paned_window.add(right_frame, weight=1)
+        # --- DIREITA: CONTROLES ---
+        rhs = ttk.Frame(panes, width=320)
+        panes.add(rhs, weight=1)
         
-        ctrl_frame = ttk.LabelFrame(right_frame, text="Controles")
-        ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
+        ctrl = ttk.LabelFrame(rhs, text="Painel de Controle")
+        ctrl.pack(fill=tk.X, padx=5, pady=5)
         
-        btn_f = ttk.Frame(ctrl_frame)
-        btn_f.pack(fill=tk.X)
-        ttk.Button(btn_f, text="Run", command=self.start_run).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_f, text="Step", command=self.step_button_action).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_f, text="Stop", command=self.stop_run).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_f, text="Reset", command=self.reset_cpu).pack(side=tk.LEFT, padx=2)
+        btns = ttk.Frame(ctrl)
+        btns.pack(fill=tk.X)
+        ttk.Button(btns, text="Run", command=self.toggle_run).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btns, text="Step", command=self.do_step).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btns, text="Stop", command=self.do_stop).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btns, text="Reset", command=self.do_reset).pack(side=tk.LEFT, padx=2)
         
-        self.btn_mode = ttk.Button(ctrl_frame, text="Visualização: HEX", command=self.toggle_display_mode)
-        self.btn_mode.pack(side=tk.RIGHT, padx=5, pady=2)
+        self.btn_hex = ttk.Button(ctrl, text="Ver: HEX", command=self.toggle_hex)
+        self.btn_hex.pack(side=tk.RIGHT, padx=5, pady=2)
         
-        spd_frame = ttk.Frame(ctrl_frame)
-        spd_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(spd_frame, text="Speed:").pack(side=tk.LEFT)
-        self.scale_speed = ttk.Scale(spd_frame, from_=50, to=1000, value=500, command=self.update_speed)
-        self.scale_speed.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        s_fr = ttk.Frame(ctrl)
+        s_fr.pack(fill=tk.X, pady=2)
+        ttk.Label(s_fr, text="Delay (ms):").pack(side=tk.LEFT)
+        self.scale = ttk.Scale(s_fr, from_=50, to=1000, value=500, command=self.set_speed)
+        self.scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
-        self.lbl_cycle = ttk.Label(ctrl_frame, text="Cycles: 0 | Flags: N=0 Z=0")
-        self.lbl_cycle.pack(side=tk.LEFT, padx=5)
-        self.lbl_micro = ttk.Label(ctrl_frame, text="Phase: IDLE", foreground="red")
-        self.lbl_micro.pack(side=tk.RIGHT, padx=5)
+        self.lbl_stats = ttk.Label(ctrl, text="Ciclos: 0 | N=0 Z=0")
+        self.lbl_stats.pack(side=tk.LEFT, padx=5)
+        self.lbl_phase = ttk.Label(ctrl, text="PARADO", foreground="red")
+        self.lbl_phase.pack(side=tk.RIGHT, padx=5)
 
-        # --- Caches L1 ---
-        cache_main_frame = ttk.LabelFrame(right_frame, text="Caches L1 (Split)")
-        cache_main_frame.pack(fill=tk.X, padx=5, pady=5)
-        split_cache = ttk.Frame(cache_main_frame)
-        split_cache.pack(fill=tk.X)
-        cols = ("valid", "tag", "data")
-        col_width = 45
+        # Caches
+        c_fr = ttk.LabelFrame(rhs, text="L1 Cache (Instrucao e Dados)")
+        c_fr.pack(fill=tk.X, padx=5, pady=5)
+        split = ttk.Frame(c_fr)
+        split.pack(fill=tk.X)
+        headers = ("V", "Tag", "Dado")
         
         # I-Cache
-        icache_frame = ttk.Frame(split_cache)
-        icache_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
-        ttk.Label(icache_frame, text="I-Cache", font=("Arial", 8, "bold")).pack()
-        self.icache_tree = ttk.Treeview(icache_frame, columns=cols, show="headings", height=8)
-        icache_scroll = ttk.Scrollbar(icache_frame, orient="vertical", command=self.icache_tree.yview)
-        self.icache_tree.configure(yscrollcommand=icache_scroll.set)
-        icache_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.icache_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        for c in cols: 
-            self.icache_tree.heading(c, text=c[0].upper())
-            self.icache_tree.column(c, width=col_width, anchor="center")
+        i_fr = ttk.Frame(split)
+        i_fr.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        ttk.Label(i_fr, text="I-Cache", font=("Arial", 8)).pack()
+        self.i_tree = ttk.Treeview(i_fr, columns=headers, show="headings", height=8)
+        for h in headers: 
+            self.i_tree.heading(h, text=h)
+            self.i_tree.column(h, width=35, anchor="center")
+        self.i_tree.pack(fill=tk.BOTH, expand=True)
 
         # D-Cache
-        dcache_frame = ttk.Frame(split_cache)
-        dcache_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
-        ttk.Label(dcache_frame, text="D-Cache", font=("Arial", 8, "bold")).pack()
-        self.dcache_tree = ttk.Treeview(dcache_frame, columns=cols, show="headings", height=8)
-        dcache_scroll = ttk.Scrollbar(dcache_frame, orient="vertical", command=self.dcache_tree.yview)
-        self.dcache_tree.configure(yscrollcommand=dcache_scroll.set)
-        dcache_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.dcache_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        for c in cols: 
-            self.dcache_tree.heading(c, text=c[0].upper())
-            self.dcache_tree.column(c, width=col_width, anchor="center")
+        d_fr = ttk.Frame(split)
+        d_fr.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        ttk.Label(d_fr, text="D-Cache", font=("Arial", 8)).pack()
+        self.d_tree = ttk.Treeview(d_fr, columns=headers, show="headings", height=8)
+        for h in headers: 
+            self.d_tree.heading(h, text=h)
+            self.d_tree.column(h, width=35, anchor="center")
+        self.d_tree.pack(fill=tk.BOTH, expand=True)
         
-        self.lbl_cache_status = ttk.Label(cache_main_frame, text="Status: IDLE", foreground="blue")
-        self.lbl_cache_status.pack()
+        self.lbl_cache = ttk.Label(c_fr, text="Status: --", foreground="blue")
+        self.lbl_cache.pack()
 
-        # --- Memória Principal ---
-        mem_frame = ttk.LabelFrame(right_frame, text="Memória Principal")
-        mem_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # RAM
+        mem_fr = ttk.LabelFrame(rhs, text="Memoria RAM")
+        mem_fr.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        self.lbl_curr_instr = tk.Label(mem_frame, text="Inicializado", 
-                                       bg="#d9edf7", fg="#31708f", font=("Consolas", 11, "bold"), 
-                                       relief="solid", bd=1, padx=5, pady=5)
-        self.lbl_curr_instr.pack(fill=tk.X, padx=2, pady=2)
+        self.lbl_next = tk.Label(mem_fr, text="PC: 0000", bg="#eee", fg="#333", font=("Consolas", 10))
+        self.lbl_next.pack(fill=tk.X, padx=2, pady=2)
 
-        tk.Checkbutton(mem_frame, text="Follow PC", variable=self.follow_pc).pack(anchor=tk.W)
+        tk.Checkbutton(mem_fr, text="Seguir PC", variable=self.follow_pc).pack(anchor=tk.W)
         
-        mem_scroll = ttk.Scrollbar(mem_frame, orient="vertical")
-        mem_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.mem_list = tk.Listbox(mem_frame, font=("Consolas", 10), yscrollcommand=mem_scroll.set)
+        sb = ttk.Scrollbar(mem_fr, orient="vertical")
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.mem_list = tk.Listbox(mem_fr, font=("Consolas", 10), yscrollcommand=sb.set)
         self.mem_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        mem_scroll.config(command=self.mem_list.yview)
+        sb.config(command=self.mem_list.yview)
         
-        self.mem_list.bind("<Double-Button-1>", self.edit_memory_value)
-        self.mem_list.bind("<Enter>", lambda e: self.set_interacting(True))
-        self.mem_list.bind("<Leave>", lambda e: self.set_interacting(False))
-        mem_scroll.bind("<Button-1>", lambda e: self.set_interacting(True))
-        mem_scroll.bind("<ButtonRelease-1>", lambda e: self.set_interacting(False))
+        self.mem_list.bind("<Double-Button-1>", self.edit_mem)
+        self.mem_list.bind("<Enter>", lambda e: self.set_int(True))
+        self.mem_list.bind("<Leave>", lambda e: self.set_int(False))
 
-    # --- Lógica de Visualização e Controle ---
+    # --- Logica da GUI ---
 
-    def set_interacting(self, status):
-        self.user_interacting = status
+    def set_int(self, val): self.interacting = val
+    def on_resize(self, e):
+        if e.width > 100: self.draw_datapath()
 
-    def on_canvas_resize(self, event):
-        if event.width > 100 and event.height > 100:
-            self.draw_datapath_layout()
+    def set_speed(self, val): self.speed = int(float(val))
 
-    def update_speed(self, val):
-        self.run_speed_ms = int(float(val))
+    def fval(self, val):
+        # Formata o valor pra Hex ou Decimal
+        if self.hex_mode: return f"{val & 0xFFFF:04X}"
+        val = val & 0xFFFF
+        return f"{val if val < 0x8000 else val - 0x10000}"
 
-    def fmt_val(self, val):
-        if self.display_hex:
-            return f"{val & 0xFFFF:04X}"
-        else:
-            if val >= 0x8000: val -= 0x10000
-            return f"{val}"
+    def toggle_hex(self):
+        pos = self.mem_list.yview()
+        self.hex_mode = not self.hex_mode
+        self.btn_hex.config(text="Ver: HEX" if self.hex_mode else "Ver: DEC")
+        self.update_ui(full=True)
+        self.mem_list.yview_moveto(pos[0])
 
-    def toggle_display_mode(self):
-        scroll_pos = self.mem_list.yview()
-        self.display_hex = not self.display_hex
-        mode_text = "HEX" if self.display_hex else "DEC"
-        self.btn_mode.config(text=f"Visualização: {mode_text}")
-        self.update_ui(full_refresh=True)
-        self.mem_list.yview_moveto(scroll_pos[0])
-
-    def draw_box(self, x, y, w, h, name, value_hex, display_label=None):
+    def draw_box(self, x, y, w, h, name, val, label=None):
+        # Desenha caixinha de registrador
         tag = f"reg_{name}"
-        label_text = display_label if display_label else name
-        self.canvas.create_rectangle(x, y, x+w, y+h, fill="#e1e1e1", outline="black", tags=tag)
-        self.canvas.create_text(x+w/2, y+15, text=label_text, font=("Arial", 8, "bold"))
-        text = self.canvas.create_text(x+w/2, y+h/2+5, text=value_hex, font=("Consolas", 10, "bold"), tags=f"val_{name}")
-        self.reg_rects[name] = tag
-        self.reg_texts[name] = text
+        lbl = label if label else name
+        self.canvas.create_rectangle(x, y, x+w, y+h, fill="#e1e1e1", outline="#333", tags=tag)
+        self.canvas.create_text(x+w/2, y+15, text=lbl, font=("Arial", 8, "bold"), fill="#555")
+        item = self.canvas.create_text(x+w/2, y+h/2+5, text=val, font=("Consolas", 10, "bold"), tags=f"val_{name}")
+        self.reg_gfx[name] = tag
+        self.reg_txt[name] = item
 
-    def draw_line(self, coords, color="gray", width=2, arrow=None, tags=None):
-        return self.canvas.create_line(coords, fill=color, width=width, arrow=arrow, 
-                                     capstyle=tk.ROUND, joinstyle=tk.ROUND, tags=tags)
+    def draw_wire(self, pts, color="#aaa", w=2, arr=None, tags=None):
+        return self.canvas.create_line(pts, fill=color, width=w, arrow=arr, capstyle=tk.ROUND, joinstyle=tk.ROUND, tags=tags)
 
-    def draw_datapath_layout(self):
+    def draw_datapath(self):
+        # Redesenha todo o diagrama (Chamado no resize)
         self.canvas.delete("all")
-        self.reg_rects = {}
-        self.reg_texts = {}
-        self.bus_ids = {}
+        self.reg_gfx = {}
+        self.reg_txt = {}
+        self.bus_gfx = {}
 
-        cw = self.canvas.winfo_width()
-        if cw < 100: cw = 650
-        cx = cw // 2
+        w = self.canvas.winfo_width()
+        w = 650 if w < 100 else w
+        cx = w // 2
         
-        reg_w, reg_h = 70, 40
-        y_start = 40 
-        gap_y = 50
+        # Dimensoes e posicoes
+        rw, rh = 70, 40
+        y0 = 40 
+        gy = 50
         
-        bus_b_x = cx - 120 
-        bus_c_x = cx + 120
-        reg_x   = cx - reg_w // 2
+        bx = cx - 120 # Barramento B
+        bc = cx + 120 # Barramento C
+        rx = cx - rw // 2
         
-        reg_order = ["MAR", "MDR", "PC", "MBR", "SP", "LV", "CPP", "TOS", "OPC", "H"]
-        total_h = y_start + len(reg_order) * gap_y + 150
-        self.canvas.configure(scrollregion=(0, 0, cw, total_h))
+        order = ["MAR", "MDR", "PC", "MBR", "SP", "LV", "CPP", "TOS", "OPC", "H"]
+        
+        # Regiao de scroll
+        th = y0 + len(order) * gy + 150
+        self.canvas.configure(scrollregion=(0, 0, w, th))
 
-        self.canvas.create_text(bus_b_x - 20, y_start - 20, text="Bus B", font=("Arial", 9, "bold"), fill="#555")
-        self.canvas.create_text(bus_c_x + 20, y_start - 20, text="Bus C", font=("Arial", 9, "bold"), fill="#555")
+        # Textos dos barramentos
+        self.canvas.create_text(bx - 20, y0 - 20, text="Bus B", font=("Arial", 8, "bold"), fill="#888")
+        self.canvas.create_text(bc + 20, y0 - 20, text="Bus C", font=("Arial", 8, "bold"), fill="#888")
         
-        bus_bottom_y = y_start + len(reg_order) * gap_y + 20
+        by = y0 + len(order) * gy + 20
         
-        self.bus_ids['main_bus_b'] = self.draw_line((bus_b_x, y_start, bus_b_x, bus_bottom_y), width=4, tags="main_bus_b")
-        self.bus_ids['main_bus_c'] = self.draw_line((bus_c_x, y_start, bus_c_x, bus_bottom_y + 60), width=4, tags="main_bus_c")
+        self.bus_gfx['main_b'] = self.draw_wire((bx, y0, bx, by), w=4, tags="main_b")
+        self.bus_gfx['main_c'] = self.draw_wire((bc, y0, bc, by + 60), w=4, tags="main_c")
 
-        def get_reg(rname):
-            if not hasattr(self, 'cpu'): return "0000"
-            return self.fmt_val(getattr(self.cpu, rname.lower()).value)
+        def gv(r): return self.fval(getattr(self.cpu, r.lower()).value) if hasattr(self, 'cpu') else "0000"
 
-        for i, name in enumerate(reg_order):
-            y = y_start + i * gap_y
-            display_name = "AC / H" if name == "H" else name
-            self.draw_box(reg_x, y, reg_w, reg_h, name, get_reg(name), display_label=display_name)
+        # Desenha registradores em loop
+        for i, name in enumerate(order):
+            y = y0 + i * gy
+            dname = "AC/H" if name == "H" else name
+            self.draw_box(rx, y, rw, rh, name, gv(name), label=dname)
             
-            self.bus_ids[f'c_to_{name}'] = self.draw_line(
-                (bus_c_x, y + reg_h/2, reg_x + reg_w, y + reg_h/2), 
-                arrow=tk.LAST, tags=f"c_to_{name}"
-            )
-            
+            # Conexoes
+            self.bus_gfx[f'c_{name}'] = self.draw_wire((bc, y + rh/2, rx + rw, y + rh/2), arr=tk.LAST, tags=f"c_{name}")
             if name not in ["MAR", "H"]:
-                self.bus_ids[f'{name}_to_b'] = self.draw_line(
-                    (reg_x, y + reg_h/2, bus_b_x, y + reg_h/2), 
-                    arrow=tk.LAST, tags=f"{name}_to_b"
-                )
+                self.bus_gfx[f'{name}_b'] = self.draw_wire((rx, y + rh/2, bx, y + rh/2), arr=tk.LAST, tags=f"{name}_b")
 
-        h_y = y_start + (len(reg_order)-1) * gap_y
-        alu_in_a_x = cx - 20
-        alu_y = bus_bottom_y
+        # ULA e Shifter
+        hy = y0 + (len(order)-1) * gy
+        ax = cx - 20
+        ay = by
         
-        self.bus_ids['h_to_alu_a'] = self.draw_line(
-            (reg_x, h_y + reg_h, reg_x + 20, h_y + reg_h + 20, alu_in_a_x, alu_y), 
-            width=3, arrow=tk.LAST, tags="h_to_alu_a"
-        )
-        self.canvas.create_text(reg_x - 30, h_y + reg_h + 10, text="Bus A", font=("Arial", 8, "bold"), fill="#555")
+        # Conexao H -> ULA
+        self.bus_gfx['h_alu'] = self.draw_wire((rx, hy + rh, rx + 20, hy + rh + 20, ax, ay), w=3, arr=tk.LAST, tags="h_alu")
+        self.canvas.create_text(rx - 30, hy + rh + 10, text="Bus A", font=("Arial", 8), fill="#888")
 
-        # ALU (Polygon) - Added tag 'comp_ALU'
-        self.canvas.create_polygon(cx-40, alu_y, cx+40, alu_y, cx+20, alu_y+50, cx-20, alu_y+50, 
-                                   fill="#ffcccb", outline="black", width=2, tags="comp_ALU")
-        self.canvas.create_text(cx, alu_y+25, text="ALU", font=("Arial", 11, "bold"))
-        self.draw_line((bus_b_x, bus_bottom_y, cx-30, bus_bottom_y), arrow=tk.LAST, tags="bus_b_to_alu")
+        # Desenho da ULA (Trapezio)
+        self.canvas.create_polygon(cx-40, ay, cx+40, ay, cx+20, ay+50, cx-20, ay+50, fill="#e8e8e8", outline="#555", width=2, tags="alu")
+        self.canvas.create_text(cx, ay+25, text="ALU", font=("Arial", 10, "bold"))
+        self.draw_wire((bx, by, cx-30, by), arr=tk.LAST, tags="b_alu")
 
-        shift_y = alu_y + 60
-        # Shifter (Rect) - Added tag 'comp_Shifter'
-        self.canvas.create_rectangle(cx-30, shift_y, cx+30, shift_y+30, fill="#add8e6", outline="black", tags="comp_Shifter")
-        self.canvas.create_text(cx, shift_y+15, text="Shifter", font=("Arial", 9))
-        self.canvas.create_line(cx, alu_y+50, cx, shift_y, width=4, fill="gray", tags="alu_to_shifter")
-        self.draw_line((cx, shift_y+30, cx, shift_y+45, bus_c_x, shift_y+45, bus_c_x, bus_bottom_y + 60), 
-                       width=4, arrow=tk.LAST, tags="bus_c")
+        # Desenho do Shifter
+        sy = ay + 60
+        self.canvas.create_rectangle(cx-30, sy, cx+30, sy+30, fill="#e8e8e8", outline="#555", tags="shifter")
+        self.canvas.create_text(cx, sy+15, text="Shift", font=("Arial", 9))
+        self.canvas.create_line(cx, ay+50, cx, sy, width=4, fill="#aaa", tags="alu_sh")
+        self.draw_wire((cx, sy+30, cx, sy+45, bc, sy+45, bc, by + 60), w=4, arr=tk.LAST, tags="sh_c")
 
-        ram_x = bus_b_x - 80
-        ram_y = y_start
-        # RAM (Rect) - Added tag 'comp_RAM'
-        self.canvas.create_rectangle(ram_x, ram_y, ram_x + 60, ram_y + gap_y + reg_h, fill="#fff0b3", outline="black", tags="comp_RAM")
-        self.canvas.create_text(ram_x + 30, ram_y + gap_y, text="RAM", font=("Arial", 10, "bold"))
-        self.draw_line((reg_x, y_start + 10, ram_x + 60, y_start + 10), arrow=tk.LAST, color="black", width=1, tags="ram_addr")
-        mdr_y = y_start + gap_y
-        self.draw_line((ram_x + 60, mdr_y + 20, reg_x, mdr_y + 20), arrow=tk.BOTH, color="black", width=1, tags="ram_data")
+        # Memoria RAM (Visual)
+        rmx = bx - 80
+        rmy = y0
+        self.canvas.create_rectangle(rmx, rmy, rmx + 60, rmy + gy + rh, fill="#fff8dc", outline="#555", tags="ram")
+        self.canvas.create_text(rmx + 30, rmy + gy, text="RAM", font=("Arial", 10, "bold"))
+        self.draw_wire((rx, y0 + 10, rmx + 60, y0 + 10), arr=tk.LAST, color="#333", w=1, tags="ram_addr")
+        mdry = y0 + gy
+        self.draw_wire((rmx + 60, mdry + 20, rx, mdry + 20), arr=tk.BOTH, color="#333", w=1, tags="ram_data")
 
-        sig = self.cpu.control_signals if hasattr(self, 'cpu') else "RESET"
-        self.control_label_id = self.canvas.create_text(cx, 20, text=sig, fill="red", font=("Consolas", 14, "bold"), anchor="center")
+        # Sinal de Controle (Texto vermelho no topo)
+        sig = self.cpu.ctrl_sig if hasattr(self, 'cpu') else "RESET"
+        self.sig_lbl = self.canvas.create_text(cx, 20, text=sig, fill="#d32f2f", font=("Consolas", 12, "bold"))
 
-        if hasattr(self, 'cpu'): self.update_ui_values_only()
+        if hasattr(self, 'cpu'): self.refresh_vals()
 
-    def animate_buses(self):
-        # 1. Clean up (Logic for Step and Run modes)
-        if self.reset_lines_job:
-            self.root.after_cancel(self.reset_lines_job)
-            self.reset_lines_job = None
-        if self.anim_job:
-            self.root.after_cancel(self.anim_job)
-        self.reset_lines()
+    def hl_wires(self):
+        # Logica pra colorir os fios (Animation)
+        if self.reset_job:
+            self.root.after_cancel(self.reset_job)
+            self.reset_job = None
+        if self.job: self.root.after_cancel(self.job)
+        self.clear_wires()
 
         if not hasattr(self, 'cpu'): return
 
-        active_color = "#FF4444"
-        component_active_color = "#FF9999" # Cor para componentes ativos (ULA, Shifter, RAM)
+        c_act = "#ff5252"  # Cor ativa (Vermelho claro)
+        c_comp = "#ffcdd2" # Cor componente ativo
 
-        opcode = self.cpu.current_opcode
-        step = self.visual_micro_step
-        bus_activity = self.cpu.bus_activity
+        op = self.cpu.curr_op
+        step = self.u_step
+        bus = self.cpu.bus
         
-        # Determine specific extended function if opcode is EXT (0xF)
-        ext_func = self.cpu.mbr.value & 0xFFF if opcode == Opcode.EXT else -1
-        
-        # Mapeamento local para instruções estendidas (conforme cpu.py)
-        IS_PUSH = (opcode == Opcode.EXT and ext_func == 3)
-        IS_POP  = (opcode == Opcode.EXT and ext_func == 4)
-        IS_RETN = (opcode == Opcode.EXT and ext_func == 5)
-        IS_SWAP = (opcode == Opcode.EXT and ext_func == 6)
-        IS_INSP = (opcode == Opcode.EXT and ext_func == 7)
-        IS_DESP = (opcode == Opcode.EXT and ext_func == 8)
+        # Verifica se eh instrucao estendida (EXT)
+        ext = self.cpu.mbr.value & 0xFFF if op == Opcode.EXT else -1
         
         tags = []
-        comps = [] # Lista de componentes para acender
+        comps = [] 
 
-        # --- STEP 1: FETCH (PC -> MAR, PC+1 -> PC) ---
-        if step == 1:
-            self.lbl_micro.config(text="1. BUSCA (Fetch: PC -> MAR)")
-            # Path: PC -> Bus B -> ALU -> Shifter -> Bus C -> MAR
-            tags = ["PC_to_b", "main_bus_b", "bus_b_to_alu", "alu_to_shifter", "main_bus_c", "bus_c", "c_to_MAR"]
-            comps = ["comp_ALU", "comp_Shifter"] # PC passa pela ULA/Shifter
-
-        # --- STEP 2: DECODE (Mem -> MDR -> MBR) ---
-        elif step == 2:
-            self.lbl_micro.config(text="2. DECODIFICAÇÃO (Decode)")
-            # Read from memory
-            if bus_activity['mem_read']:
+        # Mapeamento Visual dos Passos
+        if step == 1: # Fetch
+            self.lbl_phase.config(text="1. BUSCA")
+            tags = ["PC_b", "main_b", "b_alu", "alu_sh", "main_c", "sh_c", "c_MAR"]
+            comps = ["alu", "shifter"]
+        elif step == 2: # Decode
+            self.lbl_phase.config(text="2. DECODE")
+            if bus['rd']:
                 tags += ["ram_addr", "ram_data"]
-                comps += ["comp_RAM"]
-            
-            # MDR -> Bus B -> ALU -> Bus C -> MBR (Standard MIC-1 decode/transfer path)
-            tags += ["c_to_MDR", "MDR_to_b", "main_bus_b", "bus_b_to_alu", "alu_to_shifter", "main_bus_c", "bus_c", "c_to_MBR"] 
-            comps += ["comp_ALU", "comp_Shifter"]
+                comps += ["ram"]
+            tags += ["c_MDR", "MDR_b", "main_b", "b_alu", "alu_sh", "main_c", "sh_c", "c_MBR"] 
+            comps += ["alu", "shifter"]
+        elif step in [3, 4]: # Exec
+            self.lbl_phase.config(text=f"{step}. EXEC/WB")
+            if step == 3: comps += ["alu"]
+            if step == 4:
+                tags += ["alu_sh", "main_c", "sh_c"]
+                comps += ["shifter"]
 
-        # --- STEP 3 & 4: EXECUTE & WRITEBACK ---
-        elif step == 3 or step == 4:
-            phase_text = "3. EXECUÇÃO" if step == 3 else "4. GRAVAÇÃO"
-            self.lbl_micro.config(text=phase_text)
-            
-            # Base paths present in Execute/Writeback
-            if step == 3: # Inputs to ALU
-                # Base para maioria das operações, mas pode ser sobrescrito abaixo (ex: STOD apenas A)
-                # Vamos adicionar apenas se não houver conflito específico, mas a lógica abaixo trata melhor.
-                comps += ["comp_ALU"] 
+            # Heuristica pra acender os fios certos dependendo da Opcode
+            # Nao eh simulacao eletrica real, eh so pra ficar bonito na tela
+            if op in [Opcode.ADDD, Opcode.SUBD, Opcode.ADDL, Opcode.SUBL]:
+                if step == 3: tags += ["h_alu", "MDR_b", "main_b", "b_alu"]
+                if step == 4: 
+                    tags += ["c_H"]
+                    if bus['rd']: tags += ["ram_data"]; comps += ["ram"]
 
-            if step == 4: # Outputs from Shifter/Bus C
-                tags += ["alu_to_shifter", "main_bus_c", "bus_c"]
-                comps += ["comp_Shifter"]
+            elif op in [Opcode.LODD, Opcode.LODL]:
+                if step == 3: tags += ["MDR_b", "main_b", "b_alu"]
+                if step == 4: tags += ["c_H"]
 
-            # -- INSTRUCTION SPECIFIC LOGIC --
-            
-            # --- ALU OPERATIONS (ADDD, SUBD, ADDL, SUBL) ---
-            if opcode in [Opcode.ADDD, Opcode.SUBD, Opcode.ADDL, Opcode.SUBL]:
-                if step == 3:
-                    tags += ["h_to_alu_a", "MDR_to_b", "main_bus_b", "bus_b_to_alu"]
+            elif op == Opcode.LOCO:
+                if step == 3: tags += ["MBR_b", "main_b", "b_alu"]
+                if step == 4: tags += ["c_H"]
+
+            elif op in [Opcode.STOD, Opcode.STOL]:
+                if step == 3: tags += ["h_alu"]
                 if step == 4:
-                    tags += ["c_to_H"]
-                    if bus_activity['mem_read']: 
-                        tags += ["ram_data"]
-                        comps += ["comp_RAM"]
+                    tags += ["c_MDR"]
+                    if bus['wr']: tags += ["ram_addr", "ram_data"]; comps += ["ram"]
 
-            # --- LOAD OPERATIONS (LODD, LODL) ---
-            elif opcode in [Opcode.LODD, Opcode.LODL]:
-                if step == 3:
-                    tags += ["MDR_to_b", "main_bus_b", "bus_b_to_alu"]
-                if step == 4:
-                    tags += ["c_to_H"]
+            elif op in [Opcode.JUMP, Opcode.JPOS, Opcode.JZER, Opcode.JNEG, Opcode.JNZE]:
+                if step == 3: tags += ["MBR_b", "main_b", "b_alu"]
+                if step == 4: tags += ["c_PC"]
 
-            # --- LOAD CONSTANT (LOCO) ---
-            elif opcode == Opcode.LOCO:
-                if step == 3:
-                    tags += ["MBR_to_b", "main_bus_b", "bus_b_to_alu"]
-                if step == 4:
-                    tags += ["c_to_H"]
+            elif op == Opcode.CALL:
+                if step == 3: tags += ["PC_b", "main_b", "b_alu"]
+                if step == 4: tags += ["c_MDR", "c_SP", "c_PC"]
 
-            # --- STORE OPERATIONS (STOD, STOL) ---
-            elif opcode in [Opcode.STOD, Opcode.STOL]:
-                if step == 3:
-                    tags += ["h_to_alu_a"] # Apenas H vai para a ALU
-                if step == 4:
-                    tags += ["c_to_MDR"]
-                    if bus_activity['mem_write']: 
-                        tags += ["ram_addr", "ram_data"]
-                        comps += ["comp_RAM"]
+            # Instrucoes Estendidas
+            elif op == Opcode.EXT:
+                if ext == 3: # PUSH
+                    if step == 3: tags += ["h_alu"] 
+                    if step == 4:
+                        tags += ["c_MDR", "c_SP"]
+                        if bus['wr']: tags += ["ram_data"]; comps += ["ram"]
+                elif ext == 4: # POP
+                    if step == 3: tags += ["MDR_b", "main_b", "b_alu"]
+                    if step == 4: tags += ["c_H", "c_SP"]
+                elif ext == 5: # RETN
+                    if step == 3: tags += ["MDR_b", "main_b", "b_alu"]
+                    if step == 4: tags += ["c_PC", "c_SP"]
+                elif ext == 6: # SWAP
+                    if step == 3: tags += ["h_alu", "SP_b", "main_b", "b_alu"]
+                    if step == 4: tags += ["c_H", "c_SP"]
+                elif ext in [7, 8]: # INSP/DESP
+                    if step == 3: tags += ["SP_b", "main_b", "b_alu"]
+                    if step == 4: tags += ["c_SP"]
 
-            # --- JUMPS (JUMP, JPOS, JZER, JNEG, JNZE) ---
-            elif opcode in [Opcode.JUMP, Opcode.JPOS, Opcode.JZER, Opcode.JNEG, Opcode.JNZE]:
-                if step == 3:
-                    tags += ["MBR_to_b", "main_bus_b", "bus_b_to_alu"]
-                if step == 4:
-                    tags += ["c_to_PC"]
-
-            # --- CALL ---
-            elif opcode == Opcode.CALL:
-                if step == 3:
-                    tags += ["PC_to_b", "main_bus_b", "bus_b_to_alu"] # Save PC
-                if step == 4:
-                    tags += ["c_to_MDR", "c_to_SP"] # Write to stack buffer, update SP
-                    tags += ["c_to_PC"] # And update PC
-
-            # --- STACK OPS (PUSH) ---
-            elif IS_PUSH:
-                if step == 3:
-                    # CORREÇÃO: H vai para ALU (via Bus A ou direto se possível, aqui simulamos Bus A)
-                    # O decremento do SP é interno na simulação hardware. Visualmente, focamos no dado.
-                    tags += ["h_to_alu_a"] 
-                if step == 4:
-                    tags += ["c_to_MDR", "c_to_SP"] # Dado para MDR e SP atualiza visualmente
-                    if bus_activity['mem_write']: 
-                        tags += ["ram_data"]
-                        comps += ["comp_RAM"]
-
-            # --- STACK OPS (POP) ---
-            elif IS_POP:
-                if step == 3:
-                    # CORREÇÃO: MDR (dado lido) vai para Bus B. 
-                    # SP incrementa implicitamente/visualmente no passo 4.
-                    tags += ["MDR_to_b", "main_bus_b", "bus_b_to_alu"]
-                if step == 4:
-                    tags += ["c_to_H", "c_to_SP"] # Grava em H e atualiza SP
-
-            # --- RETURN (RETN) ---
-            elif IS_RETN:
-                if step == 3:
-                    tags += ["MDR_to_b", "main_bus_b", "bus_b_to_alu"] # Ret Addr from Mem
-                if step == 4:
-                    tags += ["c_to_PC", "c_to_SP"] # To PC, update SP
-
-            # --- SWAP ---
-            elif IS_SWAP:
-                if step == 3:
-                    tags += ["h_to_alu_a", "SP_to_b", "main_bus_b", "bus_b_to_alu"]
-                if step == 4:
-                    tags += ["c_to_H", "c_to_SP"] # Swap complete
-
-            # --- SP ARITHMETIC (INSP, DESP) ---
-            elif IS_INSP or IS_DESP:
-                if step == 3:
-                    tags += ["SP_to_b", "main_bus_b", "bus_b_to_alu"]
-                if step == 4:
-                    tags += ["c_to_SP"]
-
-        # Apply colors to lines (wires)
+        # Aplica as cores
         for tag in tags:
-            width = 3 if "ram" in tag or "main_bus" in tag else 2
-            self.canvas.itemconfig(tag, fill=active_color)
-            if "ram" in tag: self.canvas.itemconfig(tag, width=width)
+            w = 3 if "ram" in tag or "main" in tag else 2
+            self.canvas.itemconfig(tag, fill=c_act)
+            if "ram" in tag: self.canvas.itemconfig(tag, width=w)
             
-            # Auto-highlight Source/Dest registers based on the line tag
-            if "_to_b" in tag or "_to_alu" in tag: # Source
-                reg = tag.split("_")[0]
-                if reg in self.reg_rects: 
-                    self.canvas.itemconfig(self.reg_rects[reg], fill=component_active_color)
-            if "c_to_" in tag: # Dest
-                reg = tag.split("_")[2]
-                if reg in self.reg_rects:
-                    self.canvas.itemconfig(self.reg_rects[reg], fill=component_active_color)
+            # Acende registradores conectados
+            if "_b" in tag or "_alu" in tag:
+                r = tag.split("_")[0]
+                if r in self.reg_gfx: self.canvas.itemconfig(self.reg_gfx[r], fill=c_comp)
+            if "c_" in tag:
+                r = tag.split("_")[1]
+                if r in self.reg_gfx: self.canvas.itemconfig(self.reg_gfx[r], fill=c_comp)
 
-        # Apply colors to components (ALU, Shifter, RAM)
-        for comp in comps:
-            self.canvas.itemconfig(comp, fill=component_active_color)
+        for c in comps: self.canvas.itemconfig(c, fill=c_comp)
 
-        # Timer logic
-        if self.is_running:
-            delay = min(300, max(100, self.run_speed_ms // 2))
-            self.anim_job = self.root.after(delay, self.reset_lines_callback)
+        if self.running:
+            d = min(300, max(100, self.speed // 2))
+            self.job = self.root.after(d, self.clear_cb)
 
-    def reset_lines_callback(self):
-        self.reset_lines()
-        self.reset_lines_job = None
+    def clear_cb(self):
+        self.clear_wires()
+        self.reset_job = None
 
-    def reset_lines(self):
-        # Reset Lines
-        for t in ["main_bus_b", "main_bus_c", "bus_c", "bus_a", "h_to_alu_a", "bus_b_to_alu", "alu_to_shifter"]: 
-            self.canvas.itemconfig(t, fill="gray")
+    def clear_wires(self):
+        # Reseta cores pro padrao (cinza)
+        for t in ["main_b", "main_c", "sh_c", "main_a", "h_alu", "b_alu", "alu_sh"]: 
+            self.canvas.itemconfig(t, fill="#aaa")
         for item in self.canvas.find_all():
             tags = self.canvas.gettags(item)
             for t in tags:
-                if "_to_" in t or "ram_" in t:
-                    if "ram" in t: self.canvas.itemconfig(item, fill="black", width=1)
-                    else: self.canvas.itemconfig(item, fill="gray")
+                if "_b" in t or "c_" in t or "ram_" in t:
+                    c = "#333" if "ram" in t else "#aaa"
+                    self.canvas.itemconfig(item, fill=c, width=(1 if "ram" in t else 2))
         
-        # Reset Components (Rects/Polygons)
-        # Default colors
-        self.canvas.itemconfig("comp_ALU", fill="#ffcccb")
-        self.canvas.itemconfig("comp_Shifter", fill="#add8e6")
-        self.canvas.itemconfig("comp_RAM", fill="#fff0b3")
+        self.canvas.itemconfig("alu", fill="#e8e8e8")
+        self.canvas.itemconfig("shifter", fill="#e8e8e8")
+        self.canvas.itemconfig("ram", fill="#fff8dc")
         
-        # Reset Registers
-        for name in self.reg_rects:
-            # Check value to decide color (Green if non-zero, Gray if zero)
-            # We need to access cpu value again or check text
-            # Simplification: Reset to Gray/Green logic based on current value
+        # Reseta registradores (Verde se tiver valor, Cinza se zero)
+        for name in self.reg_gfx:
             if hasattr(self.cpu, name.lower()):
                 val = getattr(self.cpu, name.lower()).value
-                color = "#ccffcc" if val != 0 else "#e1e1e1"
-                self.canvas.itemconfig(self.reg_rects[name], fill=color)
+                c = "#dcedc8" if val != 0 else "#e1e1e1"
+                self.canvas.itemconfig(self.reg_gfx[name], fill=c)
 
-    def init_memory_list(self):
+    def init_mem_ui(self):
         self.mem_list.delete(0, tk.END)
         for i in range(4096): 
-            self.mem_list.insert(tk.END, f"[{i:03X} | {i:04d}]: {self.fmt_val(0)}")
+            self.mem_list.insert(tk.END, f"[{i:03X}]: 0000")
 
-    def update_memory_row(self, idx, is_pc=False, is_sp=False, is_access=False):
-        if idx < 0 or idx >= 4096: return
-        val = self.cpu.memory.ram[idx]
-        markers = []
-        if is_pc: markers.append("PC")
-        if is_sp: markers.append("SP")
-        marker_str = f" [{', '.join(markers)}]" if markers else ""
-        text = f"[{idx:03X} | {idx:04d}]: {self.fmt_val(val)}{marker_str}"
+    def update_mem_row(self, idx, pc=False, sp=False, acc=False):
+        if not (0 <= idx < 4096): return
+        val = self.cpu.mem.ram[idx]
+        tags = []
+        if pc: tags.append("PC")
+        if sp: tags.append("SP")
+        ts = f" [{', '.join(tags)}]" if tags else ""
+        
+        txt = f"[{idx:03X}]: {self.fval(val)}{ts}"
         try:
-            if self.mem_list.get(idx) != text:
+            if self.mem_list.get(idx) != txt:
                 self.mem_list.delete(idx)
-                self.mem_list.insert(idx, text)
-            bg = "white"
-            if is_access: bg = "#ffffcc"
-            elif is_pc: bg = "#e6f3ff"
-            elif is_sp: bg = "#ffe6e6"
-            self.mem_list.itemconfig(idx, {'bg': bg})
-        except Exception: pass
+                self.mem_list.insert(idx, txt)
+            
+            # Cores de fundo pra indicar PC, SP e acesso atual
+            c = "white"
+            if acc: c = "#fff9c4"
+            elif pc: c = "#bbdefb"
+            elif sp: c = "#ffcdd2"
+            self.mem_list.itemconfig(idx, {'bg': c})
+        except: pass
 
-    def update_ui(self, full_refresh=False):
-        self.update_ui_values_only()
-        curr_pc = self.cpu.pc.value
-        curr_sp = self.cpu.sp.value
-        curr_addr = self.cpu.memory.last_accessed_addr
+    def update_ui(self, full=False):
+        self.refresh_vals()
+        cpc = self.cpu.pc.value
+        csp = self.cpu.sp.value
+        caddr = self.cpu.mem.last_addr
         
-        target_addr = curr_pc
-        if 0 <= target_addr < 4096:
-            raw_instr = self.cpu.memory.ram[target_addr]
-            opcode_base = raw_instr & 0xF000
-            operand = raw_instr & 0xFFF
-            # Reverse mapping
-            rev_op = {v: k for k, v in OPCODE_MAP.items()}
-            mnemonic = rev_op.get(opcode_base, "UNK")
-            if opcode_base == 0xF000: 
-                mnemonic = rev_op.get(raw_instr, "UNK")
-            instr_str = f"{mnemonic} {operand:03X}" if self.display_hex else f"{mnemonic} {operand}"
-            self.lbl_curr_instr.config(text=f"Next: [{target_addr:03X}] | {instr_str}")
+        # Mostra proxima instrucao no topo da memoria
+        if 0 <= cpc < 4096:
+            raw = self.cpu.mem.ram[cpc]
+            op = raw & 0xF000
+            operand = raw & 0xFFF
+            rev = {v: k for k, v in OPCODE_MAP.items()}
+            mnem = rev.get(op, "UNK")
+            if op == 0xF000: mnem = rev.get(raw, "UNK")
+            s = f"{mnem} x{operand:03X}"
+            self.lbl_next.config(text=f"PC [{cpc:03X}]: {s}")
 
-        idxs = {curr_pc, curr_sp, curr_addr, self.prev_pc, self.prev_sp, self.prev_addr}
-        idxs.discard(-1)
-        
-        if full_refresh:
+        # Refresh parcial ou total da lista
+        if full:
             self.mem_list.delete(0, tk.END)
             for i in range(4096):
-                val = self.cpu.memory.ram[i]
-                self.mem_list.insert(tk.END, f"[{i:03X} | {i:04d}]: {self.fmt_val(val)}")
-            for idx in [curr_pc, curr_sp, curr_addr]:
-                 if 0 <= idx < 4096: self.update_memory_row(idx, idx==curr_pc, idx==curr_sp, idx==curr_addr)
-        else:
-            for idx in idxs:
-                if 0 <= idx < 4096: self.update_memory_row(idx, idx==curr_pc, idx==curr_sp, idx==curr_addr)
-        
-        if self.follow_pc.get() and not self.user_interacting and (self.is_running or not full_refresh):
-            self.mem_list.see(curr_pc)
-        
-        self.prev_pc, self.prev_sp, self.prev_addr = curr_pc, curr_sp, curr_addr
-
-        # --- Cache Update ---
-        for i in self.icache_tree.get_children(): self.icache_tree.delete(i)
-        for i in self.dcache_tree.get_children(): self.dcache_tree.delete(i)
-
-        for line in self.cpu.memory.i_cache.lines:
-            valid_str = "1" if line.valid else "0"
-            tag_str = f"{line.tag:03X}" if line.valid else "000"
-            data_str = self.fmt_val(line.data) if line.valid else "0000"
-            self.icache_tree.insert("", "end", values=(valid_str, tag_str, data_str))
+                val = self.cpu.mem.ram[i]
+                self.mem_list.insert(tk.END, f"[{i:03X}]: {self.fval(val)}")
             
-        for line in self.cpu.memory.d_cache.lines:
-            valid_str = "1" if line.valid else "0"
-            tag_str = f"{line.tag:03X}" if line.valid else "000"
-            data_str = self.fmt_val(line.data) if line.valid else "0000"
-            self.dcache_tree.insert("", "end", values=(valid_str, tag_str, data_str))
+            if 0 <= cpc < 4096: self.update_mem_row(cpc, pc=True)
+            if 0 <= csp < 4096: self.update_mem_row(csp, sp=True)
+        else:
+            changed = {cpc, csp, caddr, self.last_pc, self.last_sp, self.last_acc}
+            for x in changed: self.update_mem_row(x, x==cpc, x==csp, x==caddr)
+        
+        if self.follow_pc.get() and not self.interacting and (self.running or not full):
+            self.mem_list.see(cpc)
+        
+        self.last_pc, self.last_sp, self.last_acc = cpc, csp, caddr
 
-        last_st = f"I: {self.cpu.memory.i_cache.last_status} | D: {self.cpu.memory.d_cache.last_status}"
-        self.lbl_cache_status.config(text=last_st)
+        # Atualiza arvores da Cache
+        for t in [self.i_tree, self.d_tree]:
+            for x in t.get_children(): t.delete(x)
 
-    def update_ui_values_only(self):
-        for name in self.reg_texts:
+        for l in self.cpu.mem.i_cache.lines:
+            self.i_tree.insert("", "end", values=("1" if l.valid else "0", f"{l.tag:02X}", self.fval(l.data)))
+        for l in self.cpu.mem.d_cache.lines:
+            self.d_tree.insert("", "end", values=("1" if l.valid else "0", f"{l.tag:02X}", self.fval(l.data)))
+
+        self.lbl_cache.config(text=f"I: {self.cpu.mem.i_cache.last_status} | D: {self.cpu.mem.d_cache.last_status}")
+
+    def refresh_vals(self):
+        # Atualiza os valores dentro dos retangulos
+        for name in self.reg_txt:
             if hasattr(self.cpu, name.lower()):
-                reg = getattr(self.cpu, name.lower())
-                val_str = self.fmt_val(reg.value)
-                self.canvas.itemconfig(self.reg_texts[name], text=val_str)
-                # Note: Color logic moved to reset_lines mostly, but here we can force update text
-                # We let animate_buses handle active colors.
+                v = getattr(self.cpu, name.lower()).value
+                self.canvas.itemconfig(self.reg_txt[name], text=self.fval(v))
+        
+        self.canvas.itemconfig(self.sig_lbl, text=self.cpu.ctrl_sig)
+        self.lbl_stats.config(text=f"Ciclos: {self.cpu.cycle} | N={int(self.cpu.alu.n)} Z={int(self.cpu.alu.z)}")
+        self.hl_wires()
 
-        self.canvas.itemconfig(self.control_label_id, text=self.cpu.control_signals)
-        self.lbl_cycle.config(text=f"Cycles: {self.cpu.cycle_count} | Flags: N={int(self.cpu.alu.n_flag)} Z={int(self.cpu.alu.z_flag)}")
-        self.animate_buses()
-
-    def edit_memory_value(self, event):
+    def edit_mem(self, event):
+        # Permite editar memoria clicando duas vezes
         sel = self.mem_list.curselection()
         if not sel: return
         addr = sel[0]
-        prompt = f"Valor para Mem[{addr:03X}]" + (" (HEX):" if self.display_hex else ":")
-        self.user_interacting = True 
-        res = simpledialog.askstring("Editar", prompt)
-        self.user_interacting = False
+        self.interacting = True 
+        res = simpledialog.askstring("Editar RAM", f"End {addr:03X} Valor (Hex ou Dec):")
+        self.interacting = False
         if res:
             try:
-                val = int(res, 16) if self.display_hex or res.upper().startswith("0X") else int(res)
-                self.cpu.memory.write(addr, val)
-                self.update_memory_row(addr, addr==self.cpu.pc.value, addr==self.cpu.sp.value, True)
-            except ValueError: messagebox.showerror("Erro", "Valor inválido!")
+                val = int(res, 16) if "0X" in res.upper() else int(res)
+                self.cpu.mem.write(addr, val)
+                self.update_mem_row(addr, addr==self.cpu.pc.value, addr==self.cpu.sp.value, True)
+            except: messagebox.showerror("Erro", "Valor invalido")
 
-    def assemble_code(self):
-        mc, msg = assemble(self.editor.get_code())
-        if not mc and msg != "Sucesso":
-            messagebox.showerror("Erro", msg)
+    def do_assemble(self):
+        mc, msg = assemble(self.editor.get_src())
+        if msg != "OK":
+            messagebox.showerror("Erro no Assembler", msg)
             return
-        self.reset_cpu()
-        self.cpu.memory.load_program(mc)
-        self.update_ui(full_refresh=True)
-        messagebox.showinfo("Montagem", f"Sucesso! {len(mc)} palavras carregadas.")
+        self.do_reset()
+        self.cpu.mem.load_bin(mc)
+        self.update_ui(full=True)
+        messagebox.showinfo("Assembler", f"Compilado com sucesso: {len(mc)} palavras.")
 
-    def perform_micro_step(self):
+    def micro_step(self):
+        # Maquina de estados dos micro-passos
         if self.cpu.halted:
-            self.is_running = False
-            messagebox.showinfo("Fim", "CPU Halt.")
+            self.running = False
             return True
 
-        if self.visual_micro_step == 0:
-            self.visual_micro_step = 1
-            self.cpu.step_1_fetch_addr() 
+        if self.u_step == 0:
+            self.u_step = 1
+            self.cpu.fetch() 
             self.update_ui()
             return False
-        elif self.visual_micro_step == 1:
-            self.visual_micro_step = 2
-            self.cpu.step_2_fetch_mem_decode() 
+        elif self.u_step == 1:
+            self.u_step = 2
+            self.cpu.decode() 
             self.update_ui()
             return False
-        elif self.visual_micro_step == 2:
-            self.visual_micro_step = 3
+        elif self.u_step == 2:
+            self.u_step = 3
+            self.update_ui() # Apenas visual, prepara pra executar
+            return False
+        elif self.u_step == 3:
+            self.u_step = 4
+            self.cpu.execute() 
             self.update_ui()
             return False
-        elif self.visual_micro_step == 3:
-            self.visual_micro_step = 4
-            try:
-                self.cpu.execute_micro_instruction() 
-                self.update_ui()
-            except Exception as e:
-                self.is_running = False
-                messagebox.showerror("Erro", str(e))
-                return True 
-            return False
-        elif self.visual_micro_step == 4:
-            self.visual_micro_step = 0
-            self.lbl_micro.config(text="Phase: IDLE (Next Instr)")
-            self.reset_lines()
+        elif self.u_step == 4:
+            self.u_step = 0
+            self.lbl_phase.config(text="PARADO")
+            self.clear_wires()
             return True 
 
-    def step_button_action(self):
-        if self.is_running: return 
-        self.perform_micro_step()
+    def do_step(self):
+        if self.running: return 
+        self.micro_step()
 
-    def start_run(self):
-        if not self.is_running:
-            self.is_running = True
-            self.run_loop()
+    def toggle_run(self):
+        if not self.running:
+            self.running = True
+            self.loop()
 
-    def run_loop(self):
-        if not self.is_running or self.cpu.halted:
-            self.is_running = False
+    def loop(self):
+        if not self.running or self.cpu.halted:
+            self.running = False
             return
-        self.perform_micro_step()
-        if self.follow_pc.get() and not self.user_interacting:
+        self.micro_step()
+        if self.follow_pc.get() and not self.interacting:
              self.mem_list.see(self.cpu.pc.value)
-        self.root.after(self.run_speed_ms, self.run_loop)
+        self.root.after(self.speed, self.loop)
 
-    def stop_run(self): 
-        self.is_running = False
-        self.reset_lines()
-        self.lbl_micro.config(text="Phase: PAUSED")
-        self.update_ui(full_refresh=True)
+    def do_stop(self): 
+        self.running = False
+        self.clear_wires()
+        self.lbl_phase.config(text="PAUSA")
+        self.update_ui(full=True)
     
-    def reset_cpu(self):
-        self.stop_run()
-        if self.reset_lines_job: self.root.after_cancel(self.reset_lines_job)
-        if self.anim_job: self.root.after_cancel(self.anim_job)
-        self.reset_lines()
-        self.prev_pc = -1
-        self.prev_sp = -1
-        self.prev_addr = -1
-        self.visual_micro_step = 0
-        self.lbl_micro.config(text="Phase: IDLE")
+    def do_reset(self):
+        self.do_stop()
+        if self.reset_job: self.root.after_cancel(self.reset_job)
+        if self.job: self.root.after_cancel(self.job)
+        self.clear_wires()
+        self.last_pc = -1
+        self.last_sp = -1
+        self.last_acc = -1
+        self.u_step = 0
+        self.lbl_phase.config(text="IDLE")
         self.cpu.reset()
-        self.update_ui(full_refresh=True)
+        self.update_ui(full=True)

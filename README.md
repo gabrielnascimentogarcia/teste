@@ -2,7 +2,7 @@
 
 Este é um simulador didático e visual da microarquitetura **MIC-1**, projetado para auxiliar no estudo de Organização e Arquitetura de Computadores. Ele permite escrever código em Assembly, montá-lo e visualizar a execução passo a passo no caminho de dados (datapath), com detalhes sobre registradores, barramentos, ULA (ALU), Shifter e Memória (incluindo Caches L1).
 
-## 📋 Pré-requisitos
+## Pré-requisitos
 
 Para rodar este simulador, você precisa ter instalado:
 
@@ -11,7 +11,7 @@ Para rodar este simulador, você precisa ter instalado:
     *   *Windows/macOS*: Geralmente já vem instalado com o Python.
     *   *Linux*: Pode ser necessário instalar separadamente (ex: `sudo apt-get install python3-tk`).
 
-## 🚀 Como Rodar
+## Como Rodar
 
 1.  Abra o terminal na pasta raiz do projeto (`Simulador_MIC1`).
 2.  Execute o arquivo principal:
@@ -22,7 +22,7 @@ python main.py
 
 *(Se o comando `python` não funcionar, tente `python3` ou `py`).*
 
-## 🖥️ Interface e Funcionalidades
+## Interface e Funcionalidades
 
 A interface é dividida em três painéis principais:
 
@@ -49,7 +49,7 @@ A interface é dividida em três painéis principais:
 *   **Memória Principal**: Lista todo o conteúdo da RAM (4096 palavras).
     *   **Dica**: Você pode dar **duplo clique** em uma linha da memória para editar seu valor manualmente.
 
-## ⚙️ Detalhes Importantes (Para não se confundir)
+## Detalhes Importantes (Para não se confundir)
 
 ### O Botão "Step" e os Micro-passos
 Diferente de alguns depuradores que executam uma linha de código inteira por vez, este simulador mostra o **ciclo de microinstrução**. Cada instrução Assembly é quebrada em 4 fases visuais:
@@ -72,7 +72,7 @@ O simulador implementa uma **Split L1 Cache** (separada para Instruções e Dado
 *   **Tag**: Parte do endereço usada para identificar o dado.
 *   **Data**: O valor armazenado.
 
-## 🛠️ Resolução de Problemas
+## Resolução de Problemas
 
 *   **Erro "ModuleNotFoundError: No module named 'tkinter'"**: Instale o Tkinter (veja a seção de Pré-requisitos).
 *   **O código não roda após edição**: Lembre-se de clicar em **"Montar (Assemble)"** sempre que mudar o texto no editor.

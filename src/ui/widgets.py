@@ -3,100 +3,105 @@ from tkinter import ttk
 from src.common.opcodes import OPCODE_MAP
 
 class CodeEditor(tk.Frame):
-    """
-    Widget de editor de texto completo com numeração e syntax highlighting.
-    """
+    """Editor customizado com numeros de linha e cores"""
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
         
-        self.line_numbers = tk.Text(self, width=4, padx=4, takefocus=0, border=0,
-                                    background='#f0f0f0', state='disabled', font=("Consolas", 10))
-        self.line_numbers.pack(side=tk.LEFT, fill=tk.Y)
+        # Coluna dos numeros das linhas
+        self.linenum = tk.Text(self, width=4, padx=4, takefocus=0, border=0,
+                               background='#f0f0f0', state='disabled', font=("Consolas", 10))
+        self.linenum.pack(side=tk.LEFT, fill=tk.Y)
         
-        self.text_area = tk.Text(self, font=("Consolas", 10), undo=True, wrap="none")
-        self.text_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # Area do texto principal
+        self.area = tk.Text(self, font=("Consolas", 10), undo=True, wrap="none")
+        self.area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
+        # Barras de rolagem
         self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.sync_scroll)
         self.vsb.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text_area.xview)
+        self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.area.xview)
         self.hsb.pack(side=tk.BOTTOM, fill=tk.X)
-        self.text_area['xscrollcommand'] = self.hsb.set
-        self.text_area['yscrollcommand'] = self.on_text_scroll
+        self.area['xscrollcommand'] = self.hsb.set
+        self.area['yscrollcommand'] = self.on_scroll
 
-        # Configuração de Tags (Cores)
-        self.text_area.tag_configure("keyword", foreground="blue", font=("Consolas", 10, "bold"))
-        self.text_area.tag_configure("number", foreground="#c00000")
-        self.text_area.tag_configure("comment", foreground="#008000") 
-        self.text_area.tag_configure("label", foreground="#800080", font=("Consolas", 10, "bold"))
-        self.text_area.tag_configure("directive", foreground="#804000", font=("Consolas", 10, "bold"))
+        # Configuracao das cores (Tags)
+        self.area.tag_configure("kw", foreground="blue", font=("Consolas", 10, "bold"))
+        self.area.tag_configure("num", foreground="#c00000")
+        self.area.tag_configure("com", foreground="#008000") 
+        self.area.tag_configure("lbl", foreground="#800080", font=("Consolas", 10, "bold"))
+        self.area.tag_configure("dir", foreground="#804000", font=("Consolas", 10, "bold"))
 
-        self.text_area.bind("<<Change>>", self.on_change)
-        self.text_area.bind("<KeyRelease>", self.on_change)
+        # Bind pra atualizar cores quando digita
+        self.area.bind("<<Change>>", self.on_change)
+        self.area.bind("<KeyRelease>", self.on_change)
         
-        self.prev_line_count = -1
-        self.update_line_numbers()
+        self.last_lines = -1
+        self.update_gutter()
 
     def sync_scroll(self, *args):
-        self.text_area.yview(*args)
-        self.line_numbers.yview(*args)
+        # Rola texto e numeros juntos
+        self.area.yview(*args)
+        self.linenum.yview(*args)
 
-    def on_text_scroll(self, *args):
+    def on_scroll(self, *args):
         self.vsb.set(*args)
-        self.line_numbers.yview_moveto(args[0])
+        self.linenum.yview_moveto(args[0])
 
     def on_change(self, event=None):
-        self.update_line_numbers()
-        self.highlight_syntax()
+        self.update_gutter()
+        self.highlight()
 
-    def update_line_numbers(self):
-        current_lines = self.text_area.get('1.0', 'end-1c').count('\n') + 1
-        if current_lines != self.prev_line_count:
-            line_content = "\n".join(str(i) for i in range(1, current_lines + 1))
-            self.line_numbers.config(state='normal')
-            self.line_numbers.delete('1.0', tk.END)
-            self.line_numbers.insert('1.0', line_content)
-            self.line_numbers.config(state='disabled')
-            self.prev_line_count = current_lines
-        self.line_numbers.yview_moveto(self.text_area.yview()[0])
+    def update_gutter(self):
+        # Atualiza a numeracao lateral
+        lines = self.area.get('1.0', 'end-1c').count('\n') + 1
+        if lines != self.last_lines:
+            content = "\n".join(str(i) for i in range(1, lines + 1))
+            self.linenum.config(state='normal')
+            self.linenum.delete('1.0', tk.END)
+            self.linenum.insert('1.0', content)
+            self.linenum.config(state='disabled')
+            self.last_lines = lines
+        self.linenum.yview_moveto(self.area.yview()[0])
 
-    def highlight_syntax(self):
-        for tag in ["keyword", "number", "comment", "label", "directive"]:
-            self.text_area.tag_remove(tag, "1.0", tk.END)
+    def highlight(self):
+        # Remove tags antigas
+        for tag in ["kw", "num", "com", "lbl", "dir"]:
+            self.area.tag_remove(tag, "1.0", tk.END)
         
-        keywords = list(OPCODE_MAP.keys())
+        kws = list(OPCODE_MAP.keys())
         
-        # Highlight Comentários
-        start_idx = "1.0"
+        # Pinta comentarios (;)
+        start = "1.0"
         while True:
-            pos = self.text_area.search(';', start_idx, stopindex=tk.END)
+            pos = self.area.search(';', start, stopindex=tk.END)
             if not pos: break
-            line_end = self.text_area.index(f"{pos} lineend")
-            self.text_area.tag_add("comment", pos, line_end)
-            start_idx = line_end
+            eol = self.area.index(f"{pos} lineend")
+            self.area.tag_add("com", pos, eol)
+            start = eol
 
-        # Highlight Palavras
-        start_idx = "1.0"
+        # Pinta palavras reservadas e numeros
+        start = "1.0"
         while True:
-            pos = self.text_area.search(r'[\.\w]+', start_idx, stopindex=tk.END, regexp=True)
+            pos = self.area.search(r'[\.\w]+', start, stopindex=tk.END, regexp=True)
             if not pos: break
-            end_pos = f"{pos} wordend"
-            word = self.text_area.get(pos, end_pos).upper()
+            end = f"{pos} wordend"
+            word = self.area.get(pos, end).upper()
             
-            if "comment" not in self.text_area.tag_names(pos):
-                if word in keywords:
-                    self.text_area.tag_add("keyword", pos, end_pos)
+            if "com" not in self.area.tag_names(pos): # Ignora se for comentario
+                if word in kws:
+                    self.area.tag_add("kw", pos, end)
                 elif word.startswith("."):
-                     self.text_area.tag_add("directive", pos, end_pos)
+                     self.area.tag_add("dir", pos, end)
                 elif word.isdigit() or (word.startswith('0X') and len(word)>2):
-                    self.text_area.tag_add("number", pos, end_pos)
+                    self.area.tag_add("num", pos, end)
                 else:
-                    if self.text_area.get(end_pos, f"{end_pos}+1c") == ':':
-                        self.text_area.tag_add("label", pos, f"{end_pos}+1c")
-            start_idx = end_pos
+                    if self.area.get(end, f"{end}+1c") == ':':
+                        self.area.tag_add("lbl", pos, f"{end}+1c")
+            start = end
 
-    def get_code(self): return self.text_area.get("1.0", tk.END)
-    def set_code(self, text):
-        self.text_area.delete("1.0", tk.END)
-        self.text_area.insert("1.0", text)
+    def get_src(self): return self.area.get("1.0", tk.END)
+    def set_src(self, text):
+        self.area.delete("1.0", tk.END)
+        self.area.insert("1.0", text)
         self.on_change()
