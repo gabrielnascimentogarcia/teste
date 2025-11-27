@@ -6,7 +6,6 @@ def main():
     print("Iniciando Simulador MIC-1 (Arquitetura Refatorada)...")
     try:
         root = tk.Tk()
-        # Configuração de ícone ou tema poderia ir aqui
         app = Mic1GUI(root)
         root.mainloop()
     except Exception as e:
