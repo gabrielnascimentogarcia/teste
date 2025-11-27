@@ -1,4 +1,4 @@
-# Simulador MIC-1 Profissional
+# Simulador MIC-1
 
 Este é um simulador didático e visual da microarquitetura **MIC-1**, projetado para auxiliar no estudo de Organização e Arquitetura de Computadores. Ele permite escrever código em Assembly, montá-lo e visualizar a execução passo a passo no caminho de dados (datapath), com detalhes sobre registradores, barramentos, ULA (ALU), Shifter e Memória (incluindo Caches L1).
 

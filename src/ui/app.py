@@ -8,11 +8,11 @@ from src.ui.widgets import CodeEditor
 class Mic1GUI:
     """
     Aplicação GUI principal para o Simulador MIC-1.
-    Estrutura refatorada, visual clássico mantido.
+    Versão 7.4 - Correção Meticulosa de Caminhos e Componentes.
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Simulador MIC-1 Profissional v7.1")
+        self.root.title("Simulador MIC-1 Profissional v7.4")
         self.root.geometry("1400x900")
         
         self.cpu = Mic1CPU()
@@ -293,14 +293,15 @@ Fim:
         )
         self.canvas.create_text(reg_x - 30, h_y + reg_h + 10, text="Bus A", font=("Arial", 8, "bold"), fill="#555")
 
-        # ALU
+        # ALU (Polygon) - Added tag 'comp_ALU'
         self.canvas.create_polygon(cx-40, alu_y, cx+40, alu_y, cx+20, alu_y+50, cx-20, alu_y+50, 
-                                   fill="#ffcccb", outline="black", width=2)
+                                   fill="#ffcccb", outline="black", width=2, tags="comp_ALU")
         self.canvas.create_text(cx, alu_y+25, text="ALU", font=("Arial", 11, "bold"))
         self.draw_line((bus_b_x, bus_bottom_y, cx-30, bus_bottom_y), arrow=tk.LAST, tags="bus_b_to_alu")
 
         shift_y = alu_y + 60
-        self.canvas.create_rectangle(cx-30, shift_y, cx+30, shift_y+30, fill="#add8e6", outline="black")
+        # Shifter (Rect) - Added tag 'comp_Shifter'
+        self.canvas.create_rectangle(cx-30, shift_y, cx+30, shift_y+30, fill="#add8e6", outline="black", tags="comp_Shifter")
         self.canvas.create_text(cx, shift_y+15, text="Shifter", font=("Arial", 9))
         self.canvas.create_line(cx, alu_y+50, cx, shift_y, width=4, fill="gray", tags="alu_to_shifter")
         self.draw_line((cx, shift_y+30, cx, shift_y+45, bus_c_x, shift_y+45, bus_c_x, bus_bottom_y + 60), 
@@ -308,7 +309,8 @@ Fim:
 
         ram_x = bus_b_x - 80
         ram_y = y_start
-        self.canvas.create_rectangle(ram_x, ram_y, ram_x + 60, ram_y + gap_y + reg_h, fill="#fff0b3", outline="black")
+        # RAM (Rect) - Added tag 'comp_RAM'
+        self.canvas.create_rectangle(ram_x, ram_y, ram_x + 60, ram_y + gap_y + reg_h, fill="#fff0b3", outline="black", tags="comp_RAM")
         self.canvas.create_text(ram_x + 30, ram_y + gap_y, text="RAM", font=("Arial", 10, "bold"))
         self.draw_line((reg_x, y_start + 10, ram_x + 60, y_start + 10), arrow=tk.LAST, color="black", width=1, tags="ram_addr")
         mdr_y = y_start + gap_y
@@ -320,78 +322,203 @@ Fim:
         if hasattr(self, 'cpu'): self.update_ui_values_only()
 
     def animate_buses(self):
+        # 1. Clean up (Logic for Step and Run modes)
         if self.reset_lines_job:
             self.root.after_cancel(self.reset_lines_job)
             self.reset_lines_job = None
-            self.reset_lines()
-
         if self.anim_job:
             self.root.after_cancel(self.anim_job)
-        
+        self.reset_lines()
+
         if not hasattr(self, 'cpu'): return
 
         active_color = "#FF4444"
-        tags_to_light = []
-        
+        component_active_color = "#FF9999" # Cor para componentes ativos (ULA, Shifter, RAM)
+
         opcode = self.cpu.current_opcode
         step = self.visual_micro_step
         bus_activity = self.cpu.bus_activity
+        
+        # Determine specific extended function if opcode is EXT (0xF)
+        ext_func = self.cpu.mbr.value & 0xFFF if opcode == Opcode.EXT else -1
+        
+        # Mapeamento local para instruções estendidas (conforme cpu.py)
+        IS_PUSH = (opcode == Opcode.EXT and ext_func == 3)
+        IS_POP  = (opcode == Opcode.EXT and ext_func == 4)
+        IS_RETN = (opcode == Opcode.EXT and ext_func == 5)
+        IS_SWAP = (opcode == Opcode.EXT and ext_func == 6)
+        IS_INSP = (opcode == Opcode.EXT and ext_func == 7)
+        IS_DESP = (opcode == Opcode.EXT and ext_func == 8)
+        
+        tags = []
+        comps = [] # Lista de componentes para acender
 
-        if step == 1: 
-            tags_to_light = ["main_bus_b", "PC_to_b", "main_bus_c", "bus_c", "c_to_MAR"]
+        # --- STEP 1: FETCH (PC -> MAR, PC+1 -> PC) ---
+        if step == 1:
             self.lbl_micro.config(text="1. BUSCA (Fetch: PC -> MAR)")
+            # Path: PC -> Bus B -> ALU -> Shifter -> Bus C -> MAR
+            tags = ["PC_to_b", "main_bus_b", "bus_b_to_alu", "alu_to_shifter", "main_bus_c", "bus_c", "c_to_MAR"]
+            comps = ["comp_ALU", "comp_Shifter"] # PC passa pela ULA/Shifter
+
+        # --- STEP 2: DECODE (Mem -> MDR -> MBR) ---
         elif step == 2:
-            tags_to_light = []
-            if bus_activity['mem_read']: tags_to_light += ["ram_addr", "ram_data"]
-            tags_to_light += ["c_to_MDR", "main_bus_c", "bus_c", "c_to_MBR"]
             self.lbl_micro.config(text="2. DECODIFICAÇÃO (Decode)")
-        elif step == 3:
-            self.lbl_micro.config(text="3. EXECUÇÃO (Execute)")
-            if bus_activity['bus_b']: tags_to_light.append("main_bus_b")
-            if bus_activity['bus_b']: tags_to_light.append("bus_b_to_alu")
-            if bus_activity['bus_a']: tags_to_light.append("h_to_alu_a") 
-            tags_to_light.append("alu_to_shifter")
-
-            # Mapa de animação baseado no novo Hardware (usando Opcode Enum)
-            if opcode in [Opcode.ADDD, Opcode.SUBD, Opcode.LODD, Opcode.ADDL, Opcode.SUBL]:
-                 tags_to_light += ["MDR_to_b", "h_to_alu_a"]
-                 if bus_activity['mem_read']: tags_to_light.append("ram_data") 
-            elif opcode == Opcode.STOD:
-                 tags_to_light += ["h_to_alu_a"]
-            elif opcode in [Opcode.LOCO, Opcode.JUMP, Opcode.JPOS, Opcode.JZER, Opcode.JNEG, Opcode.JNZE]:
-                 tags_to_light += ["MBR_to_b"]
-            elif opcode == Opcode.CALL:
-                 tags_to_light += ["SP_to_b", "h_to_alu_a"]
-
-        elif step == 4:
-            self.lbl_micro.config(text="4. GRAVAÇÃO (Write Back)")
-            base_tags = ["alu_to_shifter", "main_bus_c", "bus_c"]
-            tags_to_light = base_tags[:]
-            if bus_activity['mem_write']: tags_to_light += ["ram_addr", "ram_data"]
+            # Read from memory
+            if bus_activity['mem_read']:
+                tags += ["ram_addr", "ram_data"]
+                comps += ["comp_RAM"]
             
-            if opcode in [Opcode.LODD, Opcode.ADDD, Opcode.SUBD, Opcode.LOCO, Opcode.LODL, Opcode.ADDL, Opcode.SUBL]:
-                 tags_to_light += ["c_to_H"]
-            elif opcode == Opcode.STOD:
-                 tags_to_light += ["c_to_MDR"]
+            # MDR -> Bus B -> ALU -> Bus C -> MBR (Standard MIC-1 decode/transfer path)
+            tags += ["c_to_MDR", "MDR_to_b", "main_bus_b", "bus_b_to_alu", "alu_to_shifter", "main_bus_c", "bus_c", "c_to_MBR"] 
+            comps += ["comp_ALU", "comp_Shifter"]
+
+        # --- STEP 3 & 4: EXECUTE & WRITEBACK ---
+        elif step == 3 or step == 4:
+            phase_text = "3. EXECUÇÃO" if step == 3 else "4. GRAVAÇÃO"
+            self.lbl_micro.config(text=phase_text)
+            
+            # Base paths present in Execute/Writeback
+            if step == 3: # Inputs to ALU
+                tags += ["bus_b_to_alu"]
+                comps += ["comp_ALU"]
+            if step == 4: # Outputs from Shifter/Bus C
+                tags += ["alu_to_shifter", "main_bus_c", "bus_c"]
+                comps += ["comp_Shifter"]
+
+            # -- INSTRUCTION SPECIFIC LOGIC --
+            
+            # --- ALU OPERATIONS (ADDD, SUBD, ADDL, SUBL) ---
+            if opcode in [Opcode.ADDD, Opcode.SUBD, Opcode.ADDL, Opcode.SUBL]:
+                # Step 3: H (Bus A) and MDR (Bus B) -> ALU
+                if step == 3:
+                    tags += ["h_to_alu_a", "MDR_to_b", "main_bus_b"]
+                # Step 4: Result -> H
+                if step == 4:
+                    tags += ["c_to_H"]
+                    # If memory read was part of operation, keep data line active
+                    if bus_activity['mem_read']: 
+                        tags += ["ram_data"]
+                        comps += ["comp_RAM"]
+
+            # --- LOAD OPERATIONS (LODD, LODL) ---
+            elif opcode in [Opcode.LODD, Opcode.LODL]:
+                # Step 3: MDR (Bus B) -> ALU (Pass B) -> H
+                if step == 3:
+                    tags += ["MDR_to_b", "main_bus_b"]
+                # Step 4: Result -> H
+                if step == 4:
+                    tags += ["c_to_H"]
+
+            # --- LOAD CONSTANT (LOCO) ---
+            elif opcode == Opcode.LOCO:
+                # Step 3: MBR (Bus B) -> ALU
+                if step == 3:
+                    tags += ["MBR_to_b", "main_bus_b"]
+                # Step 4: Result -> H
+                if step == 4:
+                    tags += ["c_to_H"]
+
+            # --- STORE OPERATIONS (STOD, STOL) ---
+            elif opcode in [Opcode.STOD, Opcode.STOL]:
+                # Step 3: H (Bus A) -> ALU -> ...
+                if step == 3:
+                    tags += ["h_to_alu_a"]
+                # Step 4: ... -> MDR (to be written to mem)
+                if step == 4:
+                    tags += ["c_to_MDR"]
+                    if bus_activity['mem_write']: 
+                        tags += ["ram_addr", "ram_data"]
+                        comps += ["comp_RAM"]
+
+            # --- JUMPS (JUMP, JPOS, JZER, JNEG, JNZE) ---
             elif opcode in [Opcode.JUMP, Opcode.JPOS, Opcode.JZER, Opcode.JNEG, Opcode.JNZE]:
-                 if bus_activity['bus_c']: tags_to_light += ["c_to_PC"]
-            elif opcode == Opcode.CALL:
-                 tags_to_light += ["c_to_SP"]
+                # Step 3: MBR (Address on Bus B) -> ALU
+                if step == 3:
+                    tags += ["MBR_to_b", "main_bus_b"]
+                # Step 4: ... -> PC
+                if step == 4:
+                    tags += ["c_to_PC"]
 
-        for tag in tags_to_light: 
-            if "ram" in tag:
-                self.canvas.itemconfig(tag, fill=active_color, width=3)
-            else:
-                self.canvas.itemconfig(tag, fill=active_color)
+            # --- CALL ---
+            elif opcode == Opcode.CALL:
+                # Complex: Save PC -> Mem, Jump MBR -> PC
+                if step == 3:
+                    tags += ["PC_to_b", "main_bus_b"] # Save PC
+                if step == 4:
+                    tags += ["c_to_MDR", "c_to_SP"] # Write to stack buffer, update SP
+                    tags += ["c_to_PC"] # And update PC
+
+            # --- STACK OPS (PUSH) ---
+            elif IS_PUSH:
+                if step == 3:
+                    # PUSH puts H onto Stack. Needs to use SP to address.
+                    # PUSH decrement SP first.
+                    tags += ["h_to_alu_a", "SP_to_b", "main_bus_b"] 
+                if step == 4:
+                    tags += ["c_to_MDR", "c_to_SP"] # To MDR (write) and SP update
+                    if bus_activity['mem_write']: 
+                        tags += ["ram_data"]
+                        comps += ["comp_RAM"]
+
+            # --- STACK OPS (POP) ---
+            elif IS_POP:
+                if step == 3:
+                    tags += ["MDR_to_b", "main_bus_b", "SP_to_b"] # Data from Mem, SP increment
+                if step == 4:
+                    tags += ["c_to_H", "c_to_SP"] # To H, update SP
+
+            # --- RETURN (RETN) ---
+            elif IS_RETN:
+                if step == 3:
+                    tags += ["MDR_to_b", "main_bus_b", "SP_to_b"] # Ret Addr from Mem
+                if step == 4:
+                    tags += ["c_to_PC", "c_to_SP"] # To PC, update SP
+
+            # --- SWAP ---
+            elif IS_SWAP:
+                if step == 3:
+                    tags += ["h_to_alu_a", "SP_to_b", "main_bus_b"]
+                if step == 4:
+                    tags += ["c_to_H", "c_to_SP"] # Swap complete
+
+            # --- SP ARITHMETIC (INSP, DESP) ---
+            elif IS_INSP or IS_DESP:
+                if step == 3:
+                    tags += ["SP_to_b", "main_bus_b"]
+                if step == 4:
+                    tags += ["c_to_SP"]
+
+        # Apply colors to lines (wires)
+        for tag in tags:
+            width = 3 if "ram" in tag or "main_bus" in tag else 2
+            self.canvas.itemconfig(tag, fill=active_color)
+            if "ram" in tag: self.canvas.itemconfig(tag, width=width)
             
-        delay = min(300, max(100, self.run_speed_ms // 2))
-        self.anim_job = self.root.after(delay, self.reset_lines_callback)
+            # Auto-highlight Source/Dest registers based on the line tag
+            if "_to_b" in tag or "_to_alu" in tag: # Source
+                reg = tag.split("_")[0]
+                if reg in self.reg_rects: 
+                    self.canvas.itemconfig(self.reg_rects[reg], fill=component_active_color)
+            if "c_to_" in tag: # Dest
+                reg = tag.split("_")[2]
+                if reg in self.reg_rects:
+                    self.canvas.itemconfig(self.reg_rects[reg], fill=component_active_color)
+
+        # Apply colors to components (ALU, Shifter, RAM)
+        for comp in comps:
+            self.canvas.itemconfig(comp, fill=component_active_color)
+
+        # Timer logic
+        if self.is_running:
+            delay = min(300, max(100, self.run_speed_ms // 2))
+            self.anim_job = self.root.after(delay, self.reset_lines_callback)
 
     def reset_lines_callback(self):
         self.reset_lines()
         self.reset_lines_job = None
 
     def reset_lines(self):
+        # Reset Lines
         for t in ["main_bus_b", "main_bus_c", "bus_c", "bus_a", "h_to_alu_a", "bus_b_to_alu", "alu_to_shifter"]: 
             self.canvas.itemconfig(t, fill="gray")
         for item in self.canvas.find_all():
@@ -400,6 +527,22 @@ Fim:
                 if "_to_" in t or "ram_" in t:
                     if "ram" in t: self.canvas.itemconfig(item, fill="black", width=1)
                     else: self.canvas.itemconfig(item, fill="gray")
+        
+        # Reset Components (Rects/Polygons)
+        # Default colors
+        self.canvas.itemconfig("comp_ALU", fill="#ffcccb")
+        self.canvas.itemconfig("comp_Shifter", fill="#add8e6")
+        self.canvas.itemconfig("comp_RAM", fill="#fff0b3")
+        
+        # Reset Registers
+        for name in self.reg_rects:
+            # Check value to decide color (Green if non-zero, Gray if zero)
+            # We need to access cpu value again or check text
+            # Simplification: Reset to Gray/Green logic based on current value
+            if hasattr(self.cpu, name.lower()):
+                val = getattr(self.cpu, name.lower()).value
+                color = "#ccffcc" if val != 0 else "#e1e1e1"
+                self.canvas.itemconfig(self.reg_rects[name], fill=color)
 
     def init_memory_list(self):
         self.mem_list.delete(0, tk.END)
@@ -488,8 +631,8 @@ Fim:
                 reg = getattr(self.cpu, name.lower())
                 val_str = self.fmt_val(reg.value)
                 self.canvas.itemconfig(self.reg_texts[name], text=val_str)
-                color = "#ccffcc" if reg.value != 0 else "#e1e1e1"
-                self.canvas.itemconfig(self.reg_rects[name], fill=color)
+                # Note: Color logic moved to reset_lines mostly, but here we can force update text
+                # We let animate_buses handle active colors.
 
         self.canvas.itemconfig(self.control_label_id, text=self.cpu.control_signals)
         self.lbl_cycle.config(text=f"Cycles: {self.cpu.cycle_count} | Flags: N={int(self.cpu.alu.n_flag)} Z={int(self.cpu.alu.z_flag)}")
